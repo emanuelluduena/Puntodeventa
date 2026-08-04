@@ -203,6 +203,15 @@ tbody td{padding:9px 13px;vertical-align:middle;}
   </div>
 </div>
 
+<div id="sucursal-screen" style="display:none;position:fixed;inset:0;background:linear-gradient(135deg,#0f172a 0%,#334155 100%);z-index:9999;align-items:center;justify-content:center;flex-direction:column;gap:0;">
+  <div style="background:white;border-radius:16px;padding:40px 36px;width:90%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,0.3);text-align:center;">
+    <div style="font-size:40px;margin-bottom:8px;">🏬</div>
+    <div style="font-family:'Fraunces',serif;font-size:20px;color:#1e293b;font-weight:700;margin-bottom:4px;">¿Con qué sucursal querés trabajar?</div>
+    <div style="font-size:12px;color:#888;margin-bottom:24px;">Podés cambiarla cerrando sesión y volviendo a entrar</div>
+    <div id="sucursal-lista" style="display:flex;flex-direction:column;gap:10px;"></div>
+  </div>
+</div>
+
 <header>
   <div class="hlogo">
     <span style="font-size:26px">🌿</span>
@@ -1362,6 +1371,22 @@ async function avisarSoporte(tipo, mensaje) {
   } catch(e) { /* si esto falla, no hay nada más que hacer */ }
 }
 let NEGOCIO_ID = null;
+let SUCURSAL_ID = null; // sucursal activa de la sesión (null = negocio sin multi-sucursal, se ignora el filtro)
+
+// Token de sesión (JWT firmado por la Edge Function /login, con el negocio_id adentro).
+// Antes de loguearse, no hay token todavía: se usa la clave pública (SB_KEY) para las
+// consultas de arranque (ej: pantalla de login). Una vez logueado, todo pasa a usar el token.
+let SESSION_TOKEN = null;
+function authToken() { return SESSION_TOKEN || SB_KEY; }
+
+// Lee la fecha de vencimiento (exp) que viene adentro del JWT, para saber cuándo pedir
+// un token nuevo. Si algo falla al leerlo, se trata como si ya estuviera vencido (más seguro).
+function _tokenExpMs(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+    return payload.exp ? payload.exp * 1000 : 0;
+  } catch(e) { return 0; }
+}
 
 // ID Map: Supabase UUID <-> numeric id local (para compatibilidad)
 let _artUUIDtoNum = {}; // uuid -> num
@@ -1373,7 +1398,7 @@ let _cliNumtoUUID = {};
 
 async function sbGet(table, params='') {
   const r = await fetch(`${SB_URL}/rest/v1/${table}?${params}`, {
-    headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}` }
+    headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${authToken()}` }
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
@@ -1383,7 +1408,7 @@ async function sbPost(table, body) {
   const r = await fetch(`${SB_URL}/rest/v1/${table}`, {
     method: 'POST',
     headers: {
-      'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}`,
+      'apikey': SB_KEY, 'Authorization': `Bearer ${authToken()}`,
       'Content-Type': 'application/json', 'Prefer': 'return=representation'
     },
     body: JSON.stringify(body)
@@ -1396,7 +1421,7 @@ async function sbPatch(table, id, body) {
   const r = await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, {
     method: 'PATCH',
     headers: {
-      'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}`,
+      'apikey': SB_KEY, 'Authorization': `Bearer ${authToken()}`,
       'Content-Type': 'application/json', 'Prefer': 'return=representation'
     },
     body: JSON.stringify(body)
@@ -1408,7 +1433,7 @@ async function sbPatch(table, id, body) {
 async function sbDelete(table, id) {
   await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, {
     method: 'DELETE',
-    headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}` }
+    headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${authToken()}` }
   });
 }
 
@@ -1416,7 +1441,7 @@ async function sbRpc(fn, params={}) {
   const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, {
     method: 'POST',
     headers: {
-      'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}`,
+      'apikey': SB_KEY, 'Authorization': `Bearer ${authToken()}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify(params)
@@ -1430,6 +1455,10 @@ async function sbRpc(fn, params={}) {
 async function cargarDesdeSupabase(negId) {
   NEGOCIO_ID = negId;
   const ng = `negocio_id=eq.${negId}`;
+  // Si hay una sucursal activa, filtramos por ella — pero incluimos también los datos
+  // "viejos" sin sucursal asignada (sucursal_id null), para no perder nada de lo cargado
+  // antes de que este negocio tuviera multi-sucursal.
+  const sucFiltro = SUCURSAL_ID ? `&or=(sucursal_id.eq.${SUCURSAL_ID},sucursal_id.is.null)` : '';
 
   // Cargar configuración del negocio desde su propia fila (nombre, slogan, dirección, etc.)
   let config = {};
@@ -1445,7 +1474,7 @@ async function cargarDesdeSupabase(negId) {
   } catch(e) { console.warn('Error cargando configuración del negocio:', e); }
 
   // Cargar proveedores
-  const provsSB = await sbGet('proveedores', `${ng}&order=codigo.asc`);
+  const provsSB = await sbGet('proveedores', `${ng}${sucFiltro}&order=codigo.asc`);
   let numProv = 1;
   const provs = provsSB.map(p => {
     const num = numProv++;
@@ -1455,7 +1484,7 @@ async function cargarDesdeSupabase(negId) {
   });
 
   // Cargar clientes
-  const clisSB = await sbGet('clientes', `${ng}&order=nombre.asc`);
+  const clisSB = await sbGet('clientes', `${ng}${sucFiltro}&order=nombre.asc`);
   let numCli = 1;
   const clis = clisSB.map(c => {
     const num = numCli++;
@@ -1468,7 +1497,7 @@ async function cargarDesdeSupabase(negId) {
   let artsSB = [];
   let offset = 0;
   while(true) {
-    const batch = await sbGet('articulos', `${ng}&eliminado_en=is.null&order=codigo.asc&limit=1000&offset=${offset}`);
+    const batch = await sbGet('articulos', `${ng}${sucFiltro}&eliminado_en=is.null&order=codigo.asc&limit=1000&offset=${offset}`);
     artsSB = artsSB.concat(batch);
     if (batch.length < 1000) break;
     offset += 1000;
@@ -1517,7 +1546,7 @@ async function cargarDesdeSupabase(negId) {
   }));
 
   // Cargar ventas (últimas 500)
-  const ventasSB = await sbGet('ventas', `${ng}&order=fecha.desc&limit=500`);
+  const ventasSB = await sbGet('ventas', `${ng}${sucFiltro}&order=fecha.desc&limit=500`);
   let numVenta = ventasSB.length;
   const pagoMapRev = { efectivo:'Efectivo', transferencia:'Transferencia', debito:'Débito', qr:'QR', credito:'Crédito' };
   const ventas = ventasSB.reverse().map(v => ({
@@ -1533,7 +1562,7 @@ async function cargarDesdeSupabase(negId) {
   }));
 
   // Cargar gastos (últimos 200)
-  const gastosSB = await sbGet('gastos', `${ng}&order=fecha.desc&limit=200`);
+  const gastosSB = await sbGet('gastos', `${ng}${sucFiltro}&order=fecha.desc&limit=200`);
   let numGasto = gastosSB.length;
   const gastos = gastosSB.reverse().map(g => ({
     id: numGasto--, _uuid: g.id,
@@ -1546,7 +1575,7 @@ async function cargarDesdeSupabase(negId) {
   let caja = [];
   try {
     // caja_movimientos puede o no existir
-    const cajaSB = await sbGet('caja_movimientos', `${ng}&order=created_at.desc&limit=200`);
+    const cajaSB = await sbGet('caja_movimientos', `${ng}${sucFiltro}&order=created_at.desc&limit=200`);
     let numCaja = cajaSB.length;
     caja = cajaSB.reverse().map(c => {
       const fh = c.created_at ? c.created_at.split('T') : [hoy(), ''];
@@ -1561,7 +1590,7 @@ async function cargarDesdeSupabase(negId) {
   // Cargar turnos
   let turnos = [];
   try {
-    const turnosSB = await sbGet('turnos', `${ng}&order=fecha_apertura.desc&limit=50`);
+    const turnosSB = await sbGet('turnos', `${ng}${sucFiltro}&order=fecha_apertura.desc&limit=50`);
     let numTurno = turnosSB.length;
     turnos = turnosSB.reverse().map(t => ({
       id: numTurno--, _uuid: t.id,
@@ -1583,7 +1612,7 @@ async function cargarDesdeSupabase(negId) {
   // Cargar papelera de artículos y purgar automáticamente lo que tenga más de 15 días
   let artsPapelera = [];
   try {
-    const papeleraSB = await sbGet('articulos', `${ng}&eliminado_en=not.is.null&order=eliminado_en.desc`);
+    const papeleraSB = await sbGet('articulos', `${ng}${sucFiltro}&eliminado_en=not.is.null&order=eliminado_en.desc`);
     const limiteMs = 15 * 24 * 60 * 60 * 1000;
     const ahoraMs = Date.now();
     for (const a of papeleraSB) {
@@ -1606,7 +1635,7 @@ async function cargarDesdeSupabase(negId) {
   // Cargar compras (últimas 200) con sus items
   let comps = [];
   try {
-    const compsSB = await sbGet('compras', `${ng}&order=fecha.desc&limit=200`);
+    const compsSB = await sbGet('compras', `${ng}${sucFiltro}&order=fecha.desc&limit=200`);
     let itemsPorCompra = {};
     if (compsSB.length) {
       const compIds = compsSB.map(c => c.id);
@@ -1733,7 +1762,7 @@ async function _syncSupabase(tipo, data, esReintento=false) {
     } else if (tipo === 'art_new') {
       const provUUID = data.provid ? _provNumtoUUID[data.provid] : null;
       const res = await sbPost('articulos', {
-        negocio_id: NEGOCIO_ID, codigo: data.cod, nombre: data.nom,
+        negocio_id: NEGOCIO_ID, sucursal_id: SUCURSAL_ID, codigo: data.cod, nombre: data.nom,
         categoria: data.cat, unidad: data.uni,
         proveedor_id: provUUID, stock_actual: data.stk, stock_minimo: data.stkmin,
         usa_stock: data.usastk === 'si', costo: data.cos,
@@ -1746,7 +1775,7 @@ async function _syncSupabase(tipo, data, esReintento=false) {
       await sbDelete('articulos', data._uuid);
     } else if (tipo === 'turno_new') {
       const res = await sbPost('turnos', {
-        negocio_id: NEGOCIO_ID,
+        negocio_id: NEGOCIO_ID, sucursal_id: SUCURSAL_ID,
         fecha_apertura: data.fecha,
         hora_apertura: data.apertura,
         fondo_inicial: data.fondo || 0
@@ -1765,7 +1794,7 @@ async function _syncSupabase(tipo, data, esReintento=false) {
       await sbPatch('articulos', data._uuid, { eliminado_en: null });
     } else if (tipo === 'prov_new') {
       const res = await sbPost('proveedores', {
-        negocio_id: NEGOCIO_ID, codigo: String(data.id), nombre: data.nom,
+        negocio_id: NEGOCIO_ID, sucursal_id: SUCURSAL_ID, codigo: String(data.id), nombre: data.nom,
         cuit: data.cuit, telefono: data.tel, email: data.email,
         direccion: data.dir, rubro: data.rub, notas: data.not, activo: true
       });
@@ -1781,7 +1810,7 @@ async function _syncSupabase(tipo, data, esReintento=false) {
       const pagoMap = { Efectivo:'efectivo', Transferencia:'transferencia', 'Débito':'debito', QR:'qr', Crédito:'credito' };
       const tv = (data.turnoId != null) ? DB.turnos.find(x => x.id === data.turnoId) : null;
       const res = await sbPost('ventas', {
-        negocio_id: NEGOCIO_ID, fecha: data.fecha, hora: data.hora,
+        negocio_id: NEGOCIO_ID, sucursal_id: SUCURSAL_ID, fecha: data.fecha, hora: data.hora,
         cliente_nombre: data.clinom, lista_precio: data.lista,
         subtotal: data.sub, descuento: data.desc, total: data.total,
         metodo_pago: pagoMap[data.pago] || data.pago, estado: 'completada',
@@ -1791,7 +1820,7 @@ async function _syncSupabase(tipo, data, esReintento=false) {
         data._uuid = res[0].id;
         // Insertar items
         const items = data.items.map(it => ({
-          venta_id: res[0].id, negocio_id: NEGOCIO_ID,
+          venta_id: res[0].id, negocio_id: NEGOCIO_ID, sucursal_id: SUCURSAL_ID,
           articulo_id: it.aid ? (_artNumtoUUID[it.aid] || null) : null,
           articulo_nombre: it.nom || 'Manual',
           cantidad: it.cant, precio_unitario: it.precio,
@@ -1803,7 +1832,7 @@ async function _syncSupabase(tipo, data, esReintento=false) {
       await sbDelete('ventas', data._uuid);
     } else if (tipo === 'gasto_new') {
       const res = await sbPost('gastos', {
-        negocio_id: NEGOCIO_ID, fecha: data.fecha, categoria: data.cat,
+        negocio_id: NEGOCIO_ID, sucursal_id: SUCURSAL_ID, fecha: data.fecha, categoria: data.cat,
         descripcion: data.desc, metodo_pago: data.met, monto: data.monto
       });
       if (res[0]) data._uuid = res[0].id;
@@ -1830,7 +1859,7 @@ async function _syncSupabase(tipo, data, esReintento=false) {
     } else if (tipo === 'compra_new') {
       const provUUID = data.provid ? _provNumtoUUID[data.provid] : null;
       const res = await sbPost('compras', {
-        negocio_id: NEGOCIO_ID, fecha: data.fecha, proveedor_id: provUUID,
+        negocio_id: NEGOCIO_ID, sucursal_id: SUCURSAL_ID, fecha: data.fecha, proveedor_id: provUUID,
         proveedor_nombre: data.provnom, nro_factura: data.nro || null, total: data.total,
         usuario_id: _sesion ? _sesion._uuid : null
       });
@@ -1869,7 +1898,7 @@ async function _syncSupabase(tipo, data, esReintento=false) {
       if (res && res.length === data.length) data.forEach((m, i) => { m.id = res[i].id; });
     } else if (tipo === 'cli_new') {
       const res = await sbPost('clientes', {
-        negocio_id: NEGOCIO_ID, nombre: data.nom, dni: data.dni || null,
+        negocio_id: NEGOCIO_ID, sucursal_id: SUCURSAL_ID, nombre: data.nom, dni: data.dni || null,
         telefono: data.tel || null, email: data.email || null,
         direccion: data.dir || null, lista_precio: data.lista || 'lista1'
       });
@@ -1939,7 +1968,7 @@ async function _syncSupabase(tipo, data, esReintento=false) {
     } else if (tipo === 'caja_new') {
       const t = (data.turnoId != null) ? DB.turnos.find(x => x.id === data.turnoId) : null;
       const res = await sbPost('caja_movimientos', {
-        negocio_id: NEGOCIO_ID, turno_id: t ? t._uuid : null, usuario_id: _sesion ? _sesion._uuid : null,
+        negocio_id: NEGOCIO_ID, sucursal_id: SUCURSAL_ID, turno_id: t ? t._uuid : null, usuario_id: _sesion ? _sesion._uuid : null,
         hora: data.hora, tipo: data.tipo, descripcion: data.desc, monto: data.monto
       });
       if (res[0]) data._uuid = res[0].id;
@@ -5739,14 +5768,28 @@ async function arrancarSistema() {
   }
 
   const sesGuardada = localStorage.getItem('sesionActiva');
-  if (sesGuardada) {
+  const tokenGuardado = localStorage.getItem('sesionToken');
+  const tokenExp = Number(localStorage.getItem('sesionTokenExp') || 0);
+  // Si no hay token guardado, o ya venció, no restauramos solos: hay que volver a pedir
+  // login (el token dura 12hs). Sin esto, el sistema quedaría intentando trabajar con la
+  // clave pública pelada, que ya no alcanza para pasar las políticas de seguridad.
+  if (sesGuardada && (!tokenGuardado || Date.now() >= tokenExp)) {
+    localStorage.removeItem('sesionActiva');
+    localStorage.removeItem('sesionToken');
+    localStorage.removeItem('sesionTokenExp');
+  }
+  if (sesGuardada && tokenGuardado && Date.now() < tokenExp) {
     try {
       const s = JSON.parse(sesGuardada);
       if (s._negocioId) {
         try {
+          SESSION_TOKEN = tokenGuardado;
+          if (sbClient && sbClient.realtime) sbClient.realtime.setAuth(SESSION_TOKEN);
+          SUCURSAL_ID = s._sucursalId || null;
           DB = await cargarDesdeSupabase(s._negocioId);
           _sesion = DB.usrs.find(u => u.usr === s.usr) || s;
           _sesion._negocioId = s._negocioId;
+          _sesion._sucursalId = s._sucursalId || null;
           iniciarHeartbeatSesion();
           document.getElementById('login-screen').style.display = 'none';
           document.getElementById('usr-badge-nom').textContent = _sesion.nom;
@@ -5768,7 +5811,10 @@ async function arrancarSistema() {
           return;
         } catch(e) {
           console.warn('Error cargando desde sesión guardada:', e);
+          SESSION_TOKEN = null;
           localStorage.removeItem('sesionActiva');
+          localStorage.removeItem('sesionToken');
+          localStorage.removeItem('sesionTokenExp');
         }
       }
     } catch(e) {}
@@ -5785,7 +5831,7 @@ async function enviarHeartbeatSesion() {
     await fetch(`${SB_URL}/rest/v1/sesiones_activas?on_conflict=negocio_id,usuario_id`, {
       method: 'POST',
       headers: {
-        'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}`,
+        'apikey': SB_KEY, 'Authorization': `Bearer ${authToken()}`,
         'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates'
       },
       body: JSON.stringify({
@@ -5807,7 +5853,7 @@ async function borrarSesionActiva() {
   try {
     await fetch(`${SB_URL}/rest/v1/sesiones_activas?negocio_id=eq.${NEGOCIO_ID}&usuario_id=eq.${_sesion._uuid}`, {
       method: 'DELETE',
-      headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}` }
+      headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${authToken()}` }
     });
   } catch(e) {}
 }
@@ -5823,12 +5869,18 @@ doLogin = async function() {
   if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = 'Conectando...'; }
 
   try {
-    // Buscar usuario por usuario+contraseña en todo el sistema, vía RPC (compara con hash real).
-    // Es seguro porque el username es único a nivel global (restricción única en la base de datos) —
-    // dos negocios nunca pueden tener el mismo nombre de usuario, así que esta búsqueda nunca es ambigua.
-    const usrsSB = await sbRpc('login_usuario', { p_username: usr, p_password: pass });
+    // Login vía Edge Function: valida usuario/contraseña del lado del servidor (con la clave
+    // privada) y devuelve un token (JWT) firmado con el negocio_id adentro. Ese token es el que
+    // se usa de ahí en más en cada consulta a Supabase, para que RLS pueda confiar en a quién
+    // pertenece cada pedido — en vez de solo creerle a la variable JS del negocio activo.
+    const loginResp = await fetch(`${SB_URL}/functions/v1/login`, {
+      method: 'POST',
+      headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: usr, password: pass })
+    });
+    const loginData = await loginResp.json();
 
-    if (!usrsSB.length) {
+    if (!loginResp.ok || !loginData.token) {
       loginErr.style.display = 'block';
       loginErr.textContent = 'Usuario o contraseña incorrectos';
       if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'Ingresar'; }
@@ -5836,7 +5888,8 @@ doLogin = async function() {
       return;
     }
 
-    const usrSB = usrsSB[0];
+    SESSION_TOKEN = loginData.token;
+    const usrSB = loginData.usuario;
     let negocioId = usrSB.negocio_id;
 
     // Verificar límite de usuarios simultáneos del plan
@@ -5868,39 +5921,23 @@ doLogin = async function() {
       }
     }
 
-    // Cargar todos los datos del negocio
-    toast('Cargando datos del negocio...', 'i');
-    DB = await cargarDesdeSupabase(negocioId);
+    // ── Decidir con qué sucursal se va a trabajar esta sesión ──
+    let sucursalesDelNegocio = [];
+    try {
+      sucursalesDelNegocio = await sbGet('sucursales', `negocio_id=eq.${negocioId}&activa=eq.true&order=nombre.asc`);
+    } catch(e) { sucursalesDelNegocio = []; }
 
-    // Encontrar el usuario en DB local
-    _sesion = DB.usrs.find(u => u.usr === usr) || { 
-      id: 1, nom: usrSB.nombre, usr: usr, rol: usrSB.rol, activo: true 
-    };
-    _sesion._negocioId = negocioId;
-
-    localStorage.setItem('sesionActiva', JSON.stringify(_sesion));
-    iniciarHeartbeatSesion();
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('usr-badge-nom').textContent = _sesion.nom;
-    aplicarPermisosMenues();
-    aplicarConfig();
-    irA('inicio');
-    renderInicio();
-    // Pre-render módulos clave para que los datos aparezcan inmediatamente
-    try { renderArts && renderArts(); } catch(e) {}
-    try { renderProvs && renderProvs(); } catch(e) {}
-    try { renderCaja && renderCaja(); } catch(e) {}
-    toast('✅ Bienvenido, ' + _sesion.nom + ' — ' + DB.arts.length + ' artículos cargados', 'v');
-    const nBajo = DB.arts.filter(function(a){return a.usastk!=='no'&&a.stk<=a.stkmin;}).length;
-    if(nBajo > 0) setTimeout(function(){ toast('⚠️ '+nBajo+' producto'+(nBajo!==1?'s':'')+' con stock bajo', 'a'); }, 1200);
-    await cargarTareasYMensajes();
-    iniciarRealtimeMensajes();
-    await cargarHorariosYFichajes();
-    const hoyStr0 = hoy();
-    const nTareas = TAREAS.filter(function(t){return t.fecha===hoyStr0&&!t.hecha&&(t.asignadoA===null||t.asignadoA===_sesion._uuid);}).length;
-    const nMsj = MENSAJES.filter(function(m){return m.para===_sesion._uuid&&!m.leido;}).length;
-    if(nTareas>0) setTimeout(function(){ toast('📋 Tenés '+nTareas+' tarea'+(nTareas!==1?'s':'')+' pendiente'+(nTareas!==1?'s':'')+' para hoy', 'i'); }, 1800);
-    if(nMsj>0) setTimeout(function(){ toast('💬 Tenés '+nMsj+' mensaje'+(nMsj!==1?'s':'')+' sin leer', 'i'); }, 2400);
+    if (usrSB.sucursal_id) {
+      // El usuario ya tiene una sucursal fija asignada (típicamente un empleado): se usa esa, sin preguntar.
+      await completarLogin(negocioId, usrSB.sucursal_id, usr, usrSB);
+    } else if (sucursalesDelNegocio.length <= 1) {
+      // Negocio con una sola sucursal (o ninguna cargada todavía): comportamiento de siempre, sin selector.
+      await completarLogin(negocioId, sucursalesDelNegocio[0] ? sucursalesDelNegocio[0].id : null, usr, usrSB);
+    } else {
+      // El negocio tiene 2+ sucursales y este usuario (Administrador) no tiene una fija: que elija.
+      if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'Ingresar'; }
+      mostrarSelectorSucursal(sucursalesDelNegocio, negocioId, usr, usrSB);
+    }
 
   } catch(e) {
     console.error('Error login:', e);
@@ -5911,6 +5948,66 @@ doLogin = async function() {
   }
 };
 
+// ── Muestra la pantalla de "elegí sucursal" y arma un botón por cada una ──
+function mostrarSelectorSucursal(sucursales, negocioId, usr, usrSB) {
+  document.getElementById('login-screen').style.display = 'none';
+  const pantalla = document.getElementById('sucursal-screen');
+  const lista = document.getElementById('sucursal-lista');
+  lista.innerHTML = sucursales.map(function(s) {
+    return '<button class="btn-sucursal" data-sucid="' + s.id + '" style="width:100%;padding:12px;background:#f8fafc;color:#1e293b;border:1.5px solid #e2e8f0;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:\'DM Sans\',sans-serif;text-align:left;">🏬 ' + (s.nombre || 'Sucursal') + (s.direccion ? '<div style="font-size:11px;color:#888;font-weight:400;margin-top:2px;">' + s.direccion + '</div>' : '') + '</button>';
+  }).join('');
+  lista.querySelectorAll('.btn-sucursal').forEach(function(btn) {
+    btn.onclick = async function() {
+      pantalla.style.display = 'none';
+      document.getElementById('splash-screen').style.display = 'flex';
+      await completarLogin(negocioId, btn.getAttribute('data-sucid'), usr, usrSB);
+    };
+  });
+  pantalla.style.display = 'flex';
+}
+
+// ── Termina el login ya sabiendo la sucursal: carga los datos y entra al sistema ──
+async function completarLogin(negocioId, sucursalId, usr, usrSB) {
+  SUCURSAL_ID = sucursalId || null;
+  toast('Cargando datos del negocio...', 'i');
+  DB = await cargarDesdeSupabase(negocioId);
+
+  // Encontrar el usuario en DB local
+  _sesion = DB.usrs.find(u => u.usr === usr) || { 
+    id: 1, nom: usrSB.nombre, usr: usr, rol: usrSB.rol, activo: true 
+  };
+  _sesion._negocioId = negocioId;
+  _sesion._sucursalId = SUCURSAL_ID;
+
+  localStorage.setItem('sesionActiva', JSON.stringify(_sesion));
+  localStorage.setItem('sesionToken', SESSION_TOKEN);
+  localStorage.setItem('sesionTokenExp', String(_tokenExpMs(SESSION_TOKEN)));
+  if (sbClient && sbClient.realtime) sbClient.realtime.setAuth(SESSION_TOKEN);
+  iniciarHeartbeatSesion();
+  document.getElementById('splash-screen').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('usr-badge-nom').textContent = _sesion.nom;
+  aplicarPermisosMenues();
+  aplicarConfig();
+  irA('inicio');
+  renderInicio();
+  // Pre-render módulos clave para que los datos aparezcan inmediatamente
+  try { renderArts && renderArts(); } catch(e) {}
+  try { renderProvs && renderProvs(); } catch(e) {}
+  try { renderCaja && renderCaja(); } catch(e) {}
+  toast('✅ Bienvenido, ' + _sesion.nom + ' — ' + DB.arts.length + ' artículos cargados', 'v');
+  const nBajo = DB.arts.filter(function(a){return a.usastk!=='no'&&a.stk<=a.stkmin;}).length;
+  if(nBajo > 0) setTimeout(function(){ toast('⚠️ '+nBajo+' producto'+(nBajo!==1?'s':'')+' con stock bajo', 'a'); }, 1200);
+  await cargarTareasYMensajes();
+  iniciarRealtimeMensajes();
+  await cargarHorariosYFichajes();
+  const hoyStr0 = hoy();
+  const nTareas = TAREAS.filter(function(t){return t.fecha===hoyStr0&&!t.hecha&&(t.asignadoA===null||t.asignadoA===_sesion._uuid);}).length;
+  const nMsj = MENSAJES.filter(function(m){return m.para===_sesion._uuid&&!m.leido;}).length;
+  if(nTareas>0) setTimeout(function(){ toast('📋 Tenés '+nTareas+' tarea'+(nTareas!==1?'s':'')+' pendiente'+(nTareas!==1?'s':'')+' para hoy', 'i'); }, 1800);
+  if(nMsj>0) setTimeout(function(){ toast('💬 Tenés '+nMsj+' mensaje'+(nMsj!==1?'s':'')+' sin leer', 'i'); }, 2400);
+}
+
 // Override doLogout
 const _doLogoutOriginal = doLogout;
 doLogout = function() {
@@ -5919,7 +6016,11 @@ doLogout = function() {
   borrarSesionActiva();
   _sesion = null;
   NEGOCIO_ID = null;
+  SUCURSAL_ID = null;
+  SESSION_TOKEN = null;
   localStorage.removeItem('sesionActiva');
+  localStorage.removeItem('sesionToken');
+  localStorage.removeItem('sesionTokenExp');
   DB = loadDB(); // reset DB local
   mostrarLogin();
 };
