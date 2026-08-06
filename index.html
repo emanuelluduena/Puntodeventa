@@ -236,6 +236,7 @@ tbody td{padding:9px 13px;vertical-align:middle;}
   <button class="tab" onclick="irA('bitacora')" data-tab="bitacora"><span class="ti">🔒</span>Bitácora</button>
   <button class="tab" onclick="irA('importar')" data-tab="importar"><span class="ti">📂</span>Importar/Export.</button>
   <button class="tab" onclick="irA('tareas')" data-tab="tareas"><span class="ti">✅</span>Tareas<span id="badge-tareas" class="tab-badge" style="display:none"></span></button>
+  <button class="tab" onclick="irA('mensajes')" data-tab="mensajes"><span class="ti">💬</span>Mensajes<span id="badge-mensajes" class="tab-badge" style="display:none"></span></button>
   <button class="tab" onclick="irA('horarios')" data-tab="horarios"><span class="ti">🕒</span>Horarios</button>
 </nav>
 <main>
@@ -806,11 +807,7 @@ tbody td{padding:9px 13px;vertical-align:middle;}
 
 <div id="mod-tareas" class="modulo">
   <div class="panel">
-    <div class="ptit">✅ Tareas y Mensajes</div>
-    <div class="brow">
-      <button class="btn bv bsm" id="subtab-check-btn" onclick="subTabTareas('check')">📋 Checklist</button>
-      <button class="btn bg bsm" id="subtab-msg-btn" onclick="subTabTareas('msg')">💬 Mensajes<span id="badge-msg-sub" class="bdg br2" style="display:none;margin-left:5px"></span></button>
-    </div>
+    <div class="ptit">✅ Tareas</div>
   </div>
 
   <div id="panel-checklist" class="panel">
@@ -836,8 +833,14 @@ tbody td{padding:9px 13px;vertical-align:middle;}
     </div>
     <div id="lista-checklist" style="margin-top:14px"></div>
   </div>
+</div>
 
-  <div id="panel-mensajes" class="panel" style="display:none">
+<div id="mod-mensajes" class="modulo">
+  <div class="panel">
+    <div class="ptit">💬 Mensajes</div>
+  </div>
+
+  <div id="panel-mensajes" class="panel">
     <div class="pvl" style="grid-template-columns:220px 1fr">
       <div>
         <div class="stit" style="display:flex;justify-content:space-between;align-items:center">
@@ -1459,6 +1462,7 @@ async function cargarDesdeSupabase(negId) {
   // "viejos" sin sucursal asignada (sucursal_id null), para no perder nada de lo cargado
   // antes de que este negocio tuviera multi-sucursal.
   const sucFiltro = SUCURSAL_ID ? `&or=(sucursal_id.eq.${SUCURSAL_ID},sucursal_id.is.null)` : '';
+  const sucFiltroExacto = SUCURSAL_ID ? `&sucursal_id=eq.${SUCURSAL_ID}` : '';
 
   // Cargar configuración del negocio desde su propia fila (nombre, slogan, dirección, etc.)
   let config = {};
@@ -1474,7 +1478,7 @@ async function cargarDesdeSupabase(negId) {
   } catch(e) { console.warn('Error cargando configuración del negocio:', e); }
 
   // Cargar proveedores
-  const provsSB = await sbGet('proveedores', `${ng}${sucFiltro}&order=codigo.asc`);
+  const provsSB = await sbGet('proveedores', `${ng}${sucFiltroExacto}&order=codigo.asc`);
   let numProv = 1;
   const provs = provsSB.map(p => {
     const num = numProv++;
@@ -1497,7 +1501,7 @@ async function cargarDesdeSupabase(negId) {
   let artsSB = [];
   let offset = 0;
   while(true) {
-    const batch = await sbGet('articulos', `${ng}${sucFiltro}&eliminado_en=is.null&order=codigo.asc&limit=1000&offset=${offset}`);
+    const batch = await sbGet('articulos', `${ng}${sucFiltroExacto}&eliminado_en=is.null&order=codigo.asc&limit=1000&offset=${offset}`);
     artsSB = artsSB.concat(batch);
     if (batch.length < 1000) break;
     offset += 1000;
@@ -1546,7 +1550,7 @@ async function cargarDesdeSupabase(negId) {
   }));
 
   // Cargar ventas (últimas 500)
-  const ventasSB = await sbGet('ventas', `${ng}${sucFiltro}&order=fecha.desc&limit=500`);
+  const ventasSB = await sbGet('ventas', `${ng}${sucFiltroExacto}&order=fecha.desc&limit=500`);
   let numVenta = ventasSB.length;
   const pagoMapRev = { efectivo:'Efectivo', transferencia:'Transferencia', debito:'Débito', qr:'QR', credito:'Crédito' };
   const ventas = ventasSB.reverse().map(v => ({
@@ -1562,7 +1566,7 @@ async function cargarDesdeSupabase(negId) {
   }));
 
   // Cargar gastos (últimos 200)
-  const gastosSB = await sbGet('gastos', `${ng}${sucFiltro}&order=fecha.desc&limit=200`);
+  const gastosSB = await sbGet('gastos', `${ng}${sucFiltroExacto}&order=fecha.desc&limit=200`);
   let numGasto = gastosSB.length;
   const gastos = gastosSB.reverse().map(g => ({
     id: numGasto--, _uuid: g.id,
@@ -1575,7 +1579,7 @@ async function cargarDesdeSupabase(negId) {
   let caja = [];
   try {
     // caja_movimientos puede o no existir
-    const cajaSB = await sbGet('caja_movimientos', `${ng}${sucFiltro}&order=created_at.desc&limit=200`);
+    const cajaSB = await sbGet('caja_movimientos', `${ng}${sucFiltroExacto}&order=created_at.desc&limit=200`);
     let numCaja = cajaSB.length;
     caja = cajaSB.reverse().map(c => {
       const fh = c.created_at ? c.created_at.split('T') : [hoy(), ''];
@@ -1590,7 +1594,7 @@ async function cargarDesdeSupabase(negId) {
   // Cargar turnos
   let turnos = [];
   try {
-    const turnosSB = await sbGet('turnos', `${ng}${sucFiltro}&order=fecha_apertura.desc&limit=50`);
+    const turnosSB = await sbGet('turnos', `${ng}${sucFiltroExacto}&order=fecha_apertura.desc&limit=50`);
     let numTurno = turnosSB.length;
     turnos = turnosSB.reverse().map(t => ({
       id: numTurno--, _uuid: t.id,
@@ -1612,7 +1616,7 @@ async function cargarDesdeSupabase(negId) {
   // Cargar papelera de artículos y purgar automáticamente lo que tenga más de 15 días
   let artsPapelera = [];
   try {
-    const papeleraSB = await sbGet('articulos', `${ng}${sucFiltro}&eliminado_en=not.is.null&order=eliminado_en.desc`);
+    const papeleraSB = await sbGet('articulos', `${ng}${sucFiltroExacto}&eliminado_en=not.is.null&order=eliminado_en.desc`);
     const limiteMs = 15 * 24 * 60 * 60 * 1000;
     const ahoraMs = Date.now();
     for (const a of papeleraSB) {
@@ -1635,7 +1639,7 @@ async function cargarDesdeSupabase(negId) {
   // Cargar compras (últimas 200) con sus items
   let comps = [];
   try {
-    const compsSB = await sbGet('compras', `${ng}${sucFiltro}&order=fecha.desc&limit=200`);
+    const compsSB = await sbGet('compras', `${ng}${sucFiltroExacto}&order=fecha.desc&limit=200`);
     let itemsPorCompra = {};
     if (compsSB.length) {
       const compIds = compsSB.map(c => c.id);
@@ -2057,13 +2061,13 @@ const MODS_NOMBRES = {
   ventas:'Ventas', caja:'Caja', estadisticas:'Estadísticas',
   gastos:'Gastos', contabilidad:'Contabilidad', precios:'Precios',
   config:'Configuración', bitacora:'Bitácora', importar:'Importar/Export.',
-  asistente:'Asistente IA', tareas:'Tareas', horarios:'Horarios'
+  asistente:'Asistente IA', tareas:'Tareas', mensajes:'Mensajes', horarios:'Horarios'
 };
 const PERMISOS_ROL = {
   'Administrador': Object.keys(MODS_NOMBRES),
-  'Vendedor':      ['inicio','ventas','articulos','clientes','proveedores','precios','asistente','tareas','horarios'],
-  'Cajero':        ['inicio','ventas','caja','asistente','tareas','horarios'],
-  'Solo Consulta': ['inicio','articulos','estadisticas','precios','asistente','tareas','horarios']
+  'Vendedor':      ['inicio','ventas','articulos','clientes','proveedores','precios','asistente','tareas','mensajes','horarios'],
+  'Cajero':        ['inicio','ventas','caja','asistente','tareas','mensajes','horarios'],
+  'Solo Consulta': ['inicio','articulos','estadisticas','precios','asistente','tareas','mensajes','horarios']
 };
 
 
@@ -2365,6 +2369,7 @@ function renderMod(tab) {
   else if(tab==='importar') renderImportar();
   else if(tab==='asistente') renderAsistente();
   else if(tab==='tareas') renderTareas();
+  else if(tab==='mensajes') renderMensajes();
   else if(tab==='horarios') renderHorarios();
 }
 
@@ -4548,21 +4553,10 @@ function guardarMensajes(){ actualizarBadgeTareas(); }
 function esAdmin(){ return _sesion && _sesion.rol === 'Administrador'; }
 
 let _fechaChecklist = hoy();
-let _subTabTareas = 'check';
 let _contactoActivo = null;
 
 function renderTareas(){
-  subTabTareas(_subTabTareas);
-}
-
-function subTabTareas(tab){
-  _subTabTareas = tab;
-  document.getElementById('panel-checklist').style.display = tab==='check' ? '' : 'none';
-  document.getElementById('panel-mensajes').style.display = tab==='msg' ? '' : 'none';
-  document.getElementById('subtab-check-btn').className = 'btn '+(tab==='check'?'bv':'bg')+' bsm';
-  document.getElementById('subtab-msg-btn').className = 'btn '+(tab==='msg'?'bv':'bg')+' bsm';
-  if(tab==='check') renderChecklist();
-  else renderMensajes();
+  renderChecklist();
 }
 
 // ───────── CHECKLIST ─────────
@@ -4869,17 +4863,17 @@ async function enviarMensajeMasivo(){
 
 // ───────── BADGE Y AVISO DE TAREAS/MENSAJES ─────────
 function actualizarBadgeTareas(){
-  const badge = document.getElementById('badge-tareas');
-  if(!badge || !_sesion) return;
+  if(!_sesion) return;
   const hoyStr = hoy();
   const pend = TAREAS.filter(function(t){
     return t.fecha===hoyStr && !t.hecha && (t.asignadoA===null || t.asignadoA===_sesion._uuid);
   }).length;
+  const badgeT = document.getElementById('badge-tareas');
+  if(badgeT){ if(pend>0){badgeT.textContent=pend;badgeT.style.display='inline-block';} else {badgeT.style.display='none';} }
+
   const noLeidos = MENSAJES.filter(function(m){return m.para===_sesion._uuid && !m.leido;}).length;
-  const n = pend + noLeidos;
-  if(n>0){ badge.textContent=n; badge.style.display='inline-block'; } else { badge.style.display='none'; }
-  const subMsg = document.getElementById('badge-msg-sub');
-  if(subMsg){ if(noLeidos>0){subMsg.textContent=noLeidos;subMsg.style.display='inline-block';} else {subMsg.style.display='none';} }
+  const badgeM = document.getElementById('badge-mensajes');
+  if(badgeM){ if(noLeidos>0){badgeM.textContent=noLeidos;badgeM.style.display='inline-block';} else {badgeM.style.display='none';} }
 }
 
 // ═══════════════════════ HORARIOS Y FICHAJE ═══════════════════════
