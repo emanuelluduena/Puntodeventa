@@ -2275,7 +2275,7 @@ window.addEventListener('load', function() {
 // ═══════════════════════ NAVEGACIÓN ═══════════════════════
 
 const _renderCache = {};
-const _siempreRender = new Set(['inicio', 'ventas', 'caja']);
+const _siempreRender = new Set(['inicio', 'ventas', 'caja', 'estadisticas']);
 
 // ═══════════════════════ PERSISTENCIA DE FILTROS ═══════════════════════
 const FILTROS_MOD = {
@@ -2312,7 +2312,6 @@ function _firma(tab) {
       case 'usuarios':    return DB.usrs.length  + '|' + (DB.usrs[DB.usrs.length-1]||{}).id;
       case 'compras':     return DB.comps.length + '|' + (DB.comps[DB.comps.length-1]||{}).id;
       case 'gastos':      return DB.gastos.length + '|' + (DB.gastos[DB.gastos.length-1]||{}).id;
-      case 'estadisticas':return DB.ventas.length + '|' + DB.gastos.length + '|' + DB.comps.length;
       case 'contabilidad':return DB.ventas.length + '|' + DB.gastos.length + '|' + DB.caja.length;
       case 'precios':     return DB.arts.length + '|' + JSON.stringify(DB.config&&DB.config.listas||'');
       case 'bitacora':    return DB.bitacora.length + '|' + (DB.bitacora[DB.bitacora.length-1]||{}).ts;
@@ -2373,6 +2372,26 @@ function renderMod(tab) {
   else if(tab==='horarios') renderHorarios();
 }
 
+// Trae el conteo real de productos vendidos en el mes, directo de Supabase.
+// Necesario porque las ventas en DB.ventas llegan con items:[] (carga liviana del login).
+async function _cargarTopProductosMes(mesStr){
+  if(!NEGOCIO_ID) return {};
+  const ng = `negocio_id=eq.${NEGOCIO_ID}`;
+  const sucF = SUCURSAL_ID ? `&sucursal_id=eq.${SUCURSAL_ID}` : '';
+  const ventasSB = await sbGet('ventas', `${ng}${sucF}&fecha=gte.${mesStr}-01&order=fecha.asc&limit=1000`);
+  const conteo = {};
+  for(let i=0;i<ventasSB.length;i+=200){
+    const lote = ventasSB.slice(i,i+200).map(v=>v.id);
+    if(!lote.length) continue;
+    const itemsSB = await sbGet('venta_items', `venta_id=in.(${lote.join(',')})`);
+    itemsSB.forEach(it=>{
+      const nom = it.articulo_nombre || 'Manual';
+      conteo[nom] = (conteo[nom]||0) + (it.cantidad||0);
+    });
+  }
+  return conteo;
+}
+
 // ═══════════════════════ INICIO ═══════════════════════
 function renderInicio() {
   actualizarBadgeStock();
@@ -2428,24 +2447,30 @@ function renderInicio() {
     }).join('');
   }
 
-  // Top 5 productos
-  var conteo = {};
-  DB.ventas.filter(function(v){return v.fecha&&v.fecha.startsWith(mesStr);}).forEach(function(v){
-    v.items.forEach(function(it){conteo[it.nom]=(conteo[it.nom]||0)+it.cant;});
-  });
-  var top = Object.entries(conteo).sort(function(a,b){return b[1]-a[1];}).slice(0,5);
+  // Top 5 productos — se pide aparte a Supabase porque las ventas cargadas
+  // en DB llegan con items:[] (se cargan lazy); acá sí necesitamos el detalle real.
   var topEl = document.getElementById('dash-top');
-  if(topEl) {
-    var emos = ['🥇','🥈','🥉','4️⃣','5️⃣'];
-    topEl.innerHTML = top.length===0
-      ? '<div class="vacio" style="padding:20px"><div class="vi">📦</div><p>Sin ventas este mes</p></div>'
-      : top.map(function(x,i){
-          return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:13px">'
-            +'<span>'+emos[i]+'</span>'
-            +'<span style="flex:1">'+x[0]+'</span>'
-            +'<span class="bdg bv2">'+x[1]+' u.</span>'
-            +'</div>';
-        }).join('');
+  if(topEl){
+    topEl.innerHTML = '<div class="vacio" style="padding:20px"><div class="vi">⏳</div><p>Cargando...</p></div>';
+    _cargarTopProductosMes(mesStr).then(function(conteo){
+      var top = Object.entries(conteo).sort(function(a,b){return b[1]-a[1];}).slice(0,5);
+      var elAhora = document.getElementById('dash-top');
+      if(!elAhora) return;
+      var emos = ['🥇','🥈','🥉','4️⃣','5️⃣'];
+      elAhora.innerHTML = top.length===0
+        ? '<div class="vacio" style="padding:20px"><div class="vi">📦</div><p>Sin ventas este mes</p></div>'
+        : top.map(function(x,i){
+            return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:13px">'
+              +'<span>'+emos[i]+'</span>'
+              +'<span style="flex:1">'+x[0]+'</span>'
+              +'<span class="bdg bv2">'+x[1]+' u.</span>'
+              +'</div>';
+          }).join('');
+    }).catch(function(e){
+      console.warn('No se pudo cargar el top de productos:',e);
+      var elAhora = document.getElementById('dash-top');
+      if(elAhora) elAhora.innerHTML = '<div class="vacio" style="padding:20px"><div class="vi">⚠️</div><p>No se pudo cargar (sin conexión)</p></div>';
+    });
   }
 
   // Ventas por pago hoy
@@ -3243,9 +3268,23 @@ function renderHist(){
   if(pgEl)pgEl.innerHTML=nav;
 }
 _pgRender['hist'] = renderHist;
-function verVenta(id){
+async function verVenta(id){
   ventaActual=DB.ventas.find(function(x){return x.id===id;});if(!ventaActual)return;
   const v=ventaActual;
+  if((!v.items || !v.items.length) && v._uuid){
+    try{
+      const itemsSB = await sbGet('venta_items', `venta_id=eq.${v._uuid}&negocio_id=eq.${NEGOCIO_ID}`);
+      v.items = itemsSB.map(it => ({
+        aid: it.articulo_id ? (_artUUIDtoNum[it.articulo_id] || null) : null,
+        nom: it.articulo_nombre || 'Manual',
+        cant: it.cantidad || 1,
+        precio: it.precio_unitario || 0,
+        manual: it.es_manual || false
+      }));
+    } catch(e){
+      console.warn('Error cargando items de venta:', e);
+    }
+  }
   let rows='';v.items.forEach(function(it){rows+='<tr><td>'+it.nom+'</td><td>'+it.cant+'</td><td>'+fmt(it.precio)+'</td><td>'+fmt(it.precio*it.cant)+'</td></tr>';});
   document.getElementById('dventa').innerHTML='<div style="background:var(--crema);border-radius:10px;padding:14px;font-size:13px"><div style="display:flex;justify-content:space-between;margin-bottom:10px"><div><strong>Venta #'+_numVentaDia(v)+'</strong><br>'+fleg(v.fecha)+' '+_hora24(v.hora)+'</div><div style="text-align:right"><strong>Cliente:</strong> '+v.clinom+'<br><span class="bdg bv2">'+(v.listaNom||v.lista)+'</span></div></div><div class="twrap"><table><thead><tr><th>Artículo</th><th>Cant.</th><th>Precio</th><th>Subtotal</th></tr></thead><tbody>'+rows+'</tbody></table></div><div style="margin-top:10px;text-align:right">Subtotal: '+fmt(v.sub)+(v.desc?'<br>Descuento: '+v.desc+'%':'')+'<div style="font-size:20px;font-weight:700;color:var(--verde);font-family:Fraunces,serif">TOTAL: '+fmt(v.total)+'</div>Pago: <strong>'+v.pago+'</strong></div></div>';
   const btnEdit=document.getElementById('vventa-btn-editar');
@@ -3676,6 +3715,113 @@ function cambiarPeriodo(){
     renderStats();
   }
 }
+// Trae ventas (con items), gastos y compras (con items) directo de Supabase
+// para el rango de fechas exacto elegido en Estadísticas — sin los topes de
+// 500/200 que tiene la carga inicial de login, y con los productos de cada
+// venta siempre incluidos (en vez del items:[] "lazy" de la carga liviana).
+let _statsData = null; // último resultado cargado: { desde, hasta, ventas, gastos, compras }
+let _statsToken = 0;   // evita que una consulta vieja pise a una más nueva
+
+function _rangoStats(){
+  const v=document.getElementById('sperio').value; const now=new Date();
+  if(v==='hoy'){const h=hoy();return {desde:h,hasta:h};}
+  if(v==='ayer'){const ay=new Date(now);ay.setDate(now.getDate()-1);const s=ay.toISOString().slice(0,10);return {desde:s,hasta:s};}
+  if(v==='semana'){const ini=new Date(now);ini.setDate(now.getDate()-now.getDay());return {desde:ini.toISOString().slice(0,10),hasta:hoy()};}
+  if(v==='mes'){const ms=now.toISOString().slice(0,7);return {desde:ms+'-01',hasta:hoy()};}
+  if(v==='custom'){
+    const desde=document.getElementById('stats-desde').value||null;
+    const hasta=document.getElementById('stats-hasta').value||null;
+    return {desde,hasta};
+  }
+  return {desde:null,hasta:null}; // 'todo' → sin límite de fecha
+}
+
+async function cargarDatosStats(desde,hasta){
+  const ng = `negocio_id=eq.${NEGOCIO_ID}`;
+  const sucF = SUCURSAL_ID ? `&sucursal_id=eq.${SUCURSAL_ID}` : '';
+  const fF = (desde?`&fecha=gte.${desde}`:'') + (hasta?`&fecha=lte.${hasta}`:'');
+  const pagoMapRev = { efectivo:'Efectivo', transferencia:'Transferencia', debito:'Débito', qr:'QR', credito:'Crédito' };
+
+  // Ventas del rango, en lotes de 1000 (para superar el límite de PostgREST si hiciera falta)
+  let ventasSB = [], offset = 0;
+  while(true){
+    const batch = await sbGet('ventas', `${ng}${sucF}${fF}&order=fecha.asc&limit=1000&offset=${offset}`);
+    ventasSB = ventasSB.concat(batch);
+    if(batch.length < 1000) break;
+    offset += 1000;
+  }
+  // Productos de esas ventas, en tandas de 200 ids por consulta
+  let itemsPorVenta = {};
+  for(let i=0;i<ventasSB.length;i+=200){
+    const lote = ventasSB.slice(i,i+200).map(v=>v.id);
+    if(!lote.length) continue;
+    const itemsSB = await sbGet('venta_items', `venta_id=in.(${lote.join(',')})`);
+    itemsSB.forEach(it=>{
+      if(!itemsPorVenta[it.venta_id]) itemsPorVenta[it.venta_id]=[];
+      itemsPorVenta[it.venta_id].push({
+        aid: it.articulo_id ? (_artUUIDtoNum[it.articulo_id]||null) : null,
+        nom: it.articulo_nombre || 'Manual',
+        cant: it.cantidad || 0,
+        precio: it.precio_unitario || 0,
+        manual: it.es_manual === true
+      });
+    });
+  }
+  const ventas = ventasSB.map(v => ({
+    _uuid: v.id, fecha: v.fecha, hora: v.hora || '',
+    clinom: v.cliente_nombre || 'Consumidor Final',
+    lista: v.lista_precio || 'lista1', listaNom: v.lista_precio || 'Lista 1',
+    items: itemsPorVenta[v.id] || [],
+    sub: v.subtotal || 0, desc: v.descuento || 0, total: v.total || 0,
+    vendedorNom: v.vendedor_nom || null,
+    pago: pagoMapRev[v.metodo_pago] || v.metodo_pago || 'Efectivo'
+  }));
+
+  // Gastos del rango
+  let gastosSB = []; offset = 0;
+  while(true){
+    const batch = await sbGet('gastos', `${ng}${sucF}${fF}&order=fecha.asc&limit=1000&offset=${offset}`);
+    gastosSB = gastosSB.concat(batch);
+    if(batch.length < 1000) break;
+    offset += 1000;
+  }
+  const gastos = gastosSB.map(g => ({
+    _uuid: g.id, fecha: g.fecha, cat: g.categoria || 'Otros',
+    desc: g.descripcion || '', met: g.metodo_pago || 'efectivo',
+    monto: g.monto || 0
+  }));
+
+  // Compras del rango, con sus items
+  let compsSB = []; offset = 0;
+  while(true){
+    const batch = await sbGet('compras', `${ng}${sucF}${fF}&order=fecha.asc&limit=1000&offset=${offset}`);
+    compsSB = compsSB.concat(batch);
+    if(batch.length < 1000) break;
+    offset += 1000;
+  }
+  let itemsPorCompra = {};
+  for(let i=0;i<compsSB.length;i+=200){
+    const lote = compsSB.slice(i,i+200).map(c=>c.id);
+    if(!lote.length) continue;
+    const itemsSB = await sbGet('compra_items', `compra_id=in.(${lote.join(',')})`);
+    itemsSB.forEach(it=>{
+      if(!itemsPorCompra[it.compra_id]) itemsPorCompra[it.compra_id]=[];
+      itemsPorCompra[it.compra_id].push({
+        aid: it.articulo_id ? (_artUUIDtoNum[it.articulo_id]||null) : null,
+        nom: it.articulo_nombre || '', cant: it.cantidad || 0,
+        cos: it.costo_unitario || 0, sub: it.subtotal || 0
+      });
+    });
+  }
+  const compras = compsSB.map(c => ({
+    _uuid: c.id, fecha: c.fecha,
+    provnom: c.proveedor_nombre || '-', nro: c.nro_factura || '',
+    total: c.total || 0, items: itemsPorCompra[c.id] || []
+  }));
+
+  return { desde, hasta, ventas, gastos, compras };
+}
+
 function getFiltro(){
   const v=document.getElementById('sperio').value;const now=new Date();
   if(v==='hoy')return function(d){return d===hoy();};
@@ -3690,16 +3836,34 @@ function getFiltro(){
   return function(){return true;};
 }
 
-function renderStats(){
-  const f=getFiltro();
-  const vf=DB.ventas.filter(function(v){return f(v.fecha);});
-  const gf=DB.gastos.filter(function(g){return f(g.fecha);});
-  const cf=DB.comps.filter(function(c){return f(c.fecha);});
+async function renderStats(){
+  const cont0=document.getElementById('scont');
+  document.getElementById('sstats').innerHTML='<div class="vacio" style="padding:20px;grid-column:1/-1"><div class="vi">⏳</div><p>Cargando datos del período...</p></div>';
+  cont0.innerHTML='';
+  const {desde,hasta}=_rangoStats();
+  const miToken=++_statsToken;
+  let vf,gf,cf,offline=false;
+  try{
+    if(!NEGOCIO_ID) throw new Error('sin negocio');
+    const datos=await cargarDatosStats(desde,hasta);
+    if(miToken!==_statsToken) return; // el usuario ya cambió el filtro, descarto esta respuesta vieja
+    _statsData=datos; vf=datos.ventas; gf=datos.gastos; cf=datos.compras;
+  }catch(e){
+    console.warn('No se pudo consultar Estadísticas en vivo, muestro datos locales:',e);
+    if(miToken!==_statsToken) return;
+    offline=true;
+    const f=getFiltro();
+    vf=DB.ventas.filter(function(v){return f(v.fecha);});
+    gf=DB.gastos.filter(function(g){return f(g.fecha);});
+    cf=DB.comps.filter(function(c){return f(c.fecha);});
+    _statsData={desde,hasta,ventas:vf,gastos:gf,compras:cf};
+  }
   const tv=vf.reduce(function(s,v){return s+v.total;},0);
   const tg=gf.reduce(function(s,g){return s+g.monto;},0);
   const tc=cf.reduce(function(s,c){return s+c.total;},0);
   const ut=tv-tg-tc;
-  document.getElementById('sstats').innerHTML=
+  const avisoOffline=offline?'<div class="alert aa" style="grid-column:1/-1;margin-bottom:10px">⚠️ Sin conexión — mostrando datos guardados en este dispositivo, puede estar incompleto para el período elegido.</div>':'';
+  document.getElementById('sstats').innerHTML=avisoOffline+
     '<div class="scard" style="cursor:pointer" onclick="verDetStats(\'ventas\')"><div class="snum">'+fmt(tv)+'</div><div class="slbl">Ventas (click)</div><div class="sdesc">Suma del total de todas las ventas del período. Click para ver el detalle.</div></div>'+
     '<div class="scard"><div class="snum">'+vf.length+'</div><div class="slbl">Tickets</div><div class="sdesc">Cantidad de ventas registradas en el período.</div></div>'+
     '<div class="scard ti"><div class="snum">'+fmt(tg+tc)+'</div><div class="slbl">Egresos</div><div class="sdesc">Gastos + compras a proveedores del período.</div></div>'+
@@ -3721,7 +3885,8 @@ function renderStats(){
   else if(c==='evol')statsEvol(vf,cont);
 }
 function verDetStats(tipo){
-  const f=getFiltro();const vf=DB.ventas.filter(function(v){return f(v.fecha);});
+  if(!_statsData) return;
+  const vf=_statsData.ventas;
   if(tipo==='ventas'){
     let rows='';[...vf].reverse().forEach(function(v){rows+='<tr><td>'+fleg(v.fecha)+'</td><td>'+v.clinom+'</td><td class="tv">'+fmt(v.total)+'</td><td>'+v.pago+'</td></tr>';});
     abrirStats('Detalle de Ventas','<div class="twrap"><table><thead><tr><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th></tr></thead><tbody>'+rows+'</tbody></table></div>');
@@ -3833,7 +3998,7 @@ function statsEvol(vf,cont){
   let rows='';dias.forEach(function(x){rows+='<tr><td>'+fleg(x[0])+'</td><td>'+x[1].cnt+'</td><td class="tv">'+fmt(x[1].tot)+'</td><td>'+fmt(x[1].cnt?x[1].tot/x[1].cnt:0)+'</td></tr>';});
   cont.innerHTML='<div class="panel"><div class="ptit">📅 Evolución Diaria</div><div style="overflow-x:auto;padding-bottom:7px"><div style="display:flex;align-items:flex-end;gap:7px;min-height:150px;padding:0 4px">'+barras+'</div></div><div class="twrap" style="margin-top:14px"><table><thead><tr><th>Fecha</th><th>Tickets</th><th>Total</th><th>Promedio</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
 }
-function exportCSV(){const f=getFiltro();const vf=DB.ventas.filter(function(v){return f(v.fecha);});let csv='Fecha,Cliente,Lista,Total,Pago\n';vf.forEach(function(v){csv+=v.fecha+',"'+v.clinom+'",'+(v.listaNom||v.lista)+','+v.total+','+v.pago+'\n';});const b=new Blob([csv],{type:'text/csv'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ventas_'+hoy()+'.csv';a.click();URL.revokeObjectURL(u);}
+function exportCSV(){const vf=_statsData?_statsData.ventas:[];let csv='Fecha,Cliente,Lista,Total,Pago\n';vf.forEach(function(v){csv+=v.fecha+',"'+v.clinom+'",'+(v.listaNom||v.lista)+','+v.total+','+v.pago+'\n';});const b=new Blob([csv],{type:'text/csv'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='ventas_'+hoy()+'.csv';a.click();URL.revokeObjectURL(u);}
 function exportDetalle(){const t=document.querySelector('#mscont table');if(!t){toast('Sin tabla','a');return;}let csv='';t.querySelectorAll('tr').forEach(function(r){csv+=[...r.querySelectorAll('th,td')].map(function(c){return '"'+c.textContent.trim()+'"';}).join(',')+'\n';});const b=new Blob([csv],{type:'text/csv'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='detalle_'+hoy()+'.csv';a.click();URL.revokeObjectURL(u);}
 
 // GASTOS
