@@ -177,6 +177,7 @@ tbody td{padding:9px 13px;vertical-align:middle;}
 #calc-win.minimizado{width:180px;}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="lib/JsBarcode.all.min.js"></script>
 </head>
 <body>
   <div id="conn-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:100000;text-align:center;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:600;padding:8px 12px;color:white;"></div>
@@ -237,6 +238,7 @@ tbody td{padding:9px 13px;vertical-align:middle;}
   <button class="tab" onclick="irA('importar')" data-tab="importar"><span class="ti">📂</span>Importar/Export.</button>
   <button class="tab" onclick="irA('tareas')" data-tab="tareas"><span class="ti">✅</span>Tareas<span id="badge-tareas" class="tab-badge" style="display:none"></span></button>
   <button class="tab" onclick="irA('mensajes')" data-tab="mensajes"><span class="ti">💬</span>Mensajes<span id="badge-mensajes" class="tab-badge" style="display:none"></span></button>
+  <button class="tab" onclick="irA('etiquetas')" data-tab="etiquetas"><span class="ti">🏷️</span>Etiquetas</button>
   <button class="tab" onclick="irA('horarios')" data-tab="horarios"><span class="ti">🕒</span>Horarios</button>
 </nav>
 <main>
@@ -307,6 +309,7 @@ tbody td{padding:9px 13px;vertical-align:middle;}
       <button class="btn bg bsm" onclick="editarSeleccionado()">✏️ Editar seleccionado</button>
       <button class="btn br bsm" onclick="borrarTodosLosArticulos()" style="background:#7f1d1d;font-size:11px" title="Elimina TODOS los artículos del sistema">⚠️ Borrar todo</button>
       <button class="btn bg bsm" onclick="abrirPapeleraArt()">🗑️ Papelera<span id="badge-papelera-art" style="background:var(--tierra);color:white;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:5px;display:none">0</span></button>
+      <button class="btn bg bsm" onclick="generarEtiquetasDesdeArticulos()">🏷️ Generar etiquetas</button>
       <span class="hint" style="margin-left:auto">F2=Nuevo</span>
     </div>
     <div class="twrap"><table>
@@ -857,6 +860,73 @@ tbody td{padding:9px 13px;vertical-align:middle;}
           <button class="btn bv bsm" onclick="enviarMensaje()">Enviar</button>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<div id="mod-etiquetas" class="modulo">
+  <div class="panel">
+    <div class="ptit">🏷️ Etiquetas</div>
+  </div>
+  <div class="panel">
+    <div class="brow" style="margin-bottom:14px">
+      <label>Ancho mm</label>
+      <input type="number" id="etq-ancho-mm" value="70" min="40" max="150" style="width:70px;border:1.5px solid #e5e7eb;border-radius:8px;padding:6px 10px">
+      <label>Alto mm</label>
+      <input type="number" id="etq-alto-mm" value="45" min="20" max="100" style="width:70px;border:1.5px solid #e5e7eb;border-radius:8px;padding:6px 10px">
+      <button class="btn bg bsm" onclick="etqAplicarTamano()">Aplicar tamaño</button>
+      <button class="btn bg bsm" onclick="etqResetPosiciones()">Restablecer</button>
+      <button class="btn bg bsm" onclick="etqGuardarPlantilla()">💾 Guardar plantilla</button>
+      <span id="etq-guardado-estado" style="font-size:13px;color:#888;margin-left:6px"></span>
+    </div>
+    <div style="background:var(--crema);border-radius:12px;padding:24px;display:flex;justify-content:center">
+      <div id="etq-lienzo" style="position:relative;background:white;border:1.5px dashed #cbd5e1;border-radius:4px;overflow:visible">
+        <div class="etq-campo" data-campo="nombre" style="position:absolute;display:flex;align-items:center;justify-content:center;cursor:grab;border-radius:4px;user-select:none;overflow:hidden;background:#EEEDFE">
+          <span class="etq-txt" style="white-space:nowrap;font-weight:600;color:#3C3489">Dulce de leche 1kg</span>
+          <div class="etq-resizer" style="position:absolute;right:-4px;bottom:-4px;width:12px;height:12px;background:#334155;border-radius:3px;cursor:nwse-resize"></div>
+        </div>
+        <div class="etq-campo" data-campo="precio" style="position:absolute;display:flex;align-items:center;justify-content:center;cursor:grab;border-radius:4px;user-select:none;overflow:hidden;background:#E1F5EE">
+          <span class="etq-txt" style="white-space:nowrap;font-weight:600;color:#085041">$ 4.250</span>
+          <div class="etq-resizer" style="position:absolute;right:-4px;bottom:-4px;width:12px;height:12px;background:#334155;border-radius:3px;cursor:nwse-resize"></div>
+        </div>
+        <div class="etq-campo" data-campo="barras" style="position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:grab;border-radius:4px;user-select:none;gap:2px;background:#FAECE7">
+          <svg id="etq-svg-barras" style="display:block"></svg>
+          <span style="font-size:10px;color:#712B13">7 79 0345 12 6</span>
+          <div class="etq-resizer" style="position:absolute;right:-4px;bottom:-4px;width:12px;height:12px;background:#334155;border-radius:3px;cursor:nwse-resize"></div>
+        </div>
+      </div>
+    </div>
+    <div id="etq-toolbar" class="brow" style="display:none;margin-top:14px;background:var(--crema);border-radius:8px;padding:8px 12px;width:fit-content">
+      <span id="etq-toolbar-label" style="font-size:13px;color:#666"></span>
+      <button class="btn bg bsm" onclick="etqCambiarFuente(-1)">➖</button>
+      <span id="etq-font-out" style="font-size:13px;min-width:32px;text-align:center;display:inline-block">14px</span>
+      <button class="btn bg bsm" onclick="etqCambiarFuente(1)">➕</button>
+    </div>
+    <p style="font-size:13px;color:#888;margin-top:10px">Tocá un campo para seleccionarlo, arrastralo para moverlo, o tirá de la manija de la esquina para agrandarlo o achicarlo.</p>
+  </div>
+  <div class="panel">
+    <div class="ptit">📋 Cola de impresión</div>
+    <div class="brow" style="margin-bottom:14px">
+      <label>Lista de precios</label>
+      <select id="etq-lista-precio" onchange="etqRenderCola()">
+        <option value="lista1">Lista 1</option>
+        <option value="lista2">Lista 2</option>
+        <option value="lista3">Lista 3</option>
+        <option value="mayor">Por Mayor</option>
+      </select>
+      <div class="bus" style="max-width:280px">
+        <span>🔍</span>
+        <input id="etq-buscador" placeholder="Buscar producto para agregar..." oninput="etqBuscarProducto()" autocomplete="off">
+      </div>
+    </div>
+    <div id="etq-resultados-busqueda" style="margin-bottom:10px"></div>
+    <div class="twrap"><table>
+      <thead><tr><th>Producto</th><th>Precio</th><th style="width:80px">Cant.</th><th style="width:40px"></th></tr></thead>
+      <tbody id="etq-tbody-cola"></tbody>
+    </table></div>
+    <div class="brow" style="margin-top:14px">
+      <button class="btn bv" onclick="etqImprimir()">🖨️ Imprimir etiquetas</button>
+      <button class="btn bg bsm" onclick="_etqCola=[];etqRenderCola();">🗑️ Vaciar cola</button>
     </div>
   </div>
 </div>
@@ -1533,6 +1603,7 @@ async function cargarDesdeSupabase(negId) {
       stkmin: a.stock_minimo || 0,
       usastk: a.usa_stock ? 'si' : 'no',
       venc: a.fecha_vencimiento || null,
+      cbarras: a.codigo_barras || '',
       cos, p1, p2, p3, pm, u1, u2, u3, um, cm: 2
     };
   });
@@ -2061,11 +2132,11 @@ const MODS_NOMBRES = {
   ventas:'Ventas', caja:'Caja', estadisticas:'Estadísticas',
   gastos:'Gastos', contabilidad:'Contabilidad', precios:'Precios',
   config:'Configuración', bitacora:'Bitácora', importar:'Importar/Export.',
-  asistente:'Asistente IA', tareas:'Tareas', mensajes:'Mensajes', horarios:'Horarios'
+  asistente:'Asistente IA', tareas:'Tareas', mensajes:'Mensajes', horarios:'Horarios', etiquetas:'Etiquetas'
 };
 const PERMISOS_ROL = {
   'Administrador': Object.keys(MODS_NOMBRES),
-  'Vendedor':      ['inicio','ventas','articulos','clientes','proveedores','precios','asistente','tareas','mensajes','horarios'],
+  'Vendedor':      ['inicio','ventas','articulos','clientes','proveedores','precios','asistente','tareas','mensajes','horarios','etiquetas'],
   'Cajero':        ['inicio','ventas','caja','asistente','tareas','mensajes','horarios'],
   'Solo Consulta': ['inicio','articulos','estadisticas','precios','asistente','tareas','mensajes','horarios']
 };
@@ -2370,6 +2441,386 @@ function renderMod(tab) {
   else if(tab==='tareas') renderTareas();
   else if(tab==='mensajes') renderMensajes();
   else if(tab==='horarios') renderHorarios();
+  else if(tab==='etiquetas') renderEtiquetas();
+}
+
+const ETQ_PX_POR_MM = 3.5;
+const ETQ_ANCHO_MIN_BARRAS_MM = 32;
+const ETQ_ALTO_MIN_BARRAS_MM = 16;
+let _etqSeleccionado = null;
+let _etqPosiciones = {
+  nombre: { x: 6, y: 6, w: 150, h: 22, font: 13 },
+  precio: { x: 6, y: 32, w: 110, h: 32, font: 22 },
+  barras: { x: 6, y: 68, w: 120, h: 56 }
+};
+
+let _etqPlantillaId = null;
+
+function renderEtiquetas(){
+  etqCargarPlantilla();
+  etqRenderCola();
+}
+
+function etqBuscarProducto(){
+  const q = document.getElementById('etq-buscador').value.trim().toLowerCase();
+  const cont = document.getElementById('etq-resultados-busqueda');
+  if(!q){ cont.innerHTML = ''; return; }
+  const encontrados = DB.arts.filter(function(a){
+    return a.nom.toLowerCase().includes(q) || a.cod.toLowerCase().includes(q);
+  }).slice(0, 8);
+  if(!encontrados.length){ cont.innerHTML = '<div style="font-size:13px;color:#888">Sin resultados</div>'; return; }
+  cont.innerHTML = encontrados.map(function(a){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--crema);border-radius:6px;margin-bottom:4px">'+
+      '<span style="font-size:13px">'+a.nom+' <span class="bdg bv2">'+a.cod+'</span></span>'+
+      '<button class="btn bv bsm" onclick="etqAgregarACola('+a.id+')">➕ Agregar</button>'+
+    '</div>';
+  }).join('');
+}
+
+function etqAgregarACola(artId){
+  if(_etqCola.some(function(item){ return item.artId === artId; })){
+    toast('Ese producto ya está en la cola', 'a');
+    return;
+  }
+  _etqCola.push({ artId: artId, cantidad: 1, nombreOverride: null, precioOverride: null });
+  document.getElementById('etq-buscador').value = '';
+  document.getElementById('etq-resultados-busqueda').innerHTML = '';
+  etqRenderCola();
+}
+
+function etqQuitarDeCola(artId){
+  _etqCola = _etqCola.filter(function(item){ return item.artId !== artId; });
+  etqRenderCola();
+}
+
+function etqCambiarCantidad(artId, val){
+  const item = _etqCola.find(function(i){ return i.artId === artId; });
+  if(item) item.cantidad = Math.max(1, parseInt(val)||1);
+}
+
+function etqCambiarNombreOverride(artId, val){
+  const item = _etqCola.find(function(i){ return i.artId === artId; });
+  if(item) item.nombreOverride = val.trim() || null;
+}
+
+function etqCambiarPrecioOverride(artId, val){
+  const item = _etqCola.find(function(i){ return i.artId === artId; });
+  if(item){
+    const num = parseFloat(val);
+    item.precioOverride = isNaN(num) ? null : num;
+  }
+}
+
+function etqGenerarBarcodeSVG(codigo){
+  if(!codigo) return null;
+  try{
+    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    JsBarcode(svg, codigo, { format: codigo.length===13?'EAN13':'CODE128', width: 1.6, height: 40, displayValue: false, margin: 0 });
+    return new XMLSerializer().serializeToString(svg);
+  }catch(e){
+    console.error('Error generando código de barras para impresión:', e);
+    return null;
+  }
+}
+
+function etqImprimir(){
+  if(!_etqCola.length){ toast('La cola de impresión está vacía', 'a'); return; }
+  const listaSel = document.getElementById('etq-lista-precio');
+  const lista = listaSel ? listaSel.value : 'lista1';
+  const anchoMm = parseFloat(document.getElementById('etq-ancho-mm').value) || 63;
+  const altoMm = parseFloat(document.getElementById('etq-alto-mm').value) || 33;
+
+  // Armar una etiqueta HTML por copia, repitiendo según la cantidad de cada producto
+  let etiquetasHtml = '';
+  let faltantes = 0;
+  _etqCola.forEach(function(item){
+    const art = DB.arts.find(function(a){ return a.id === item.artId; });
+    if(!art) return;
+    const nombreMostrado = item.nombreOverride != null ? item.nombreOverride : art.nom;
+    const precioCalc = etqPrecioParaLista(art, lista);
+    const precioMostrado = item.precioOverride != null ? item.precioOverride : precioCalc;
+    const barcodeSvg = etqGenerarBarcodeSVG(art.cod);
+    if(!barcodeSvg) faltantes++;
+    const pN = _etqPosiciones.nombre, pP = _etqPosiciones.precio, pB = _etqPosiciones.barras;
+    const unaEtiqueta =
+      '<div class="etq-print-label" style="width:'+anchoMm+'mm;height:'+altoMm+'mm">'+
+        '<div class="etq-fit" style="position:absolute;left:'+(pN.x/ETQ_PX_POR_MM)+'mm;top:'+(pN.y/ETQ_PX_POR_MM)+'mm;width:'+(pN.w/ETQ_PX_POR_MM)+'mm;overflow:visible;display:block"><span style="font-size:'+(pN.font/ETQ_PX_POR_MM)+'mm;white-space:normal;font-weight:600;word-break:break-word;display:block;line-height:1.15">'+nombreMostrado+'</span></div>'+
+        '<div class="etq-fit-precio" style="position:absolute;left:'+(pP.x/ETQ_PX_POR_MM)+'mm;top:'+(pP.y/ETQ_PX_POR_MM)+'mm;width:'+(pP.w/ETQ_PX_POR_MM)+'mm;height:'+(pP.h/ETQ_PX_POR_MM)+'mm;overflow:hidden;display:flex;align-items:center;min-width:0"><span style="font-size:'+(pP.font/ETQ_PX_POR_MM)+'mm;white-space:nowrap;font-weight:700;display:inline-block;max-width:100%">'+fmt(precioMostrado)+'</span></div>'+
+        '<div style="position:absolute;left:'+(pB.x/ETQ_PX_POR_MM)+'mm;top:'+(pB.y/ETQ_PX_POR_MM)+'mm;width:'+(pB.w/ETQ_PX_POR_MM)+'mm;height:'+(pB.h/ETQ_PX_POR_MM)+'mm;display:flex;flex-direction:column;align-items:center;justify-content:center">'+
+          (barcodeSvg || '<span style="font-size:9px;color:#999">Sin código</span>')+
+        '</div>'+
+      '</div>';
+    for(let i=0;i<item.cantidad;i++){ etiquetasHtml += unaEtiqueta; }
+  });
+
+  if(faltantes>0) toast(faltantes+' producto'+(faltantes!==1?'s':'')+' sin código de barras cargado, se imprimen sin él', 'a');
+
+  const w = window.open('','_blank');
+  w.document.write('<!DOCTYPE html><html><head><title>Etiquetas</title><style>'+
+    '@page{size:A4;margin:10mm}'+
+    'body{font-family:Arial,sans-serif;display:flex;flex-wrap:wrap;gap:2mm;margin:0}'+
+    '.etq-print-label{position:relative;border:0.2mm dashed #ccc;box-sizing:border-box;overflow:hidden}'+
+    '@media print{.etq-print-label{border-color:#eee}}'+
+    '</style></head><body>'+etiquetasHtml+
+    '<scr'+'ipt>'+
+    'function ajustarTexto(){'+
+      'document.querySelectorAll(".etq-fit").forEach(function(cont){'+
+        'var span=cont.querySelector("span");'+
+        'if(!span)return;'+
+        'var tries=0;'+
+        'var sizeMm=parseFloat(getComputedStyle(span).fontSize)/(96/25.4);'+
+        'var pisoMm=Math.max(2.0, sizeMm*0.55);'+
+        'while(span.scrollWidth>cont.clientWidth && sizeMm>pisoMm && tries<40){'+
+          'sizeMm=sizeMm*0.94;'+
+          'span.style.fontSize=sizeMm+"mm";'+
+          'tries++;'+
+        '}'+
+        'if(span.scrollWidth>cont.clientWidth){'+
+          'span.style.whiteSpace="nowrap";'+
+          'span.style.overflow="hidden";'+
+          'span.style.textOverflow="ellipsis";'+
+          'span.style.display="inline-block";'+
+          'span.style.maxWidth=cont.clientWidth+"px";'+
+        '}'+
+      '});'+
+      'document.querySelectorAll(".etq-fit-precio").forEach(function(cont){'+
+        'var span=cont.querySelector("span");'+
+        'if(!span)return;'+
+        'var tries=0;'+
+        'var sizeMm=parseFloat(getComputedStyle(span).fontSize)/(96/25.4);'+
+        'var pisoMm=Math.max(2.0, sizeMm*0.55);'+
+        'while(span.scrollWidth>cont.clientWidth && sizeMm>pisoMm && tries<40){'+
+          'sizeMm=sizeMm*0.94;'+
+          'span.style.fontSize=sizeMm+"mm";'+
+          'tries++;'+
+        '}'+
+      '});'+
+    '}'+
+    'ajustarTexto();'+
+    'window.print();'+
+    '<\/scr'+'ipt>'+
+    '<\/body><\/html>');
+  w.document.close();
+}
+
+
+function etqRenderCola(){
+  const tb = document.getElementById('etq-tbody-cola');
+  if(!tb) return;
+  const listaSel = document.getElementById('etq-lista-precio');
+  const lista = listaSel ? listaSel.value : 'lista1';
+  if(!_etqCola.length){
+    tb.innerHTML = '<tr><td colspan="4"><div class="vacio"><div class="vi">🏷️</div><p>Sin productos en la cola. Buscá uno arriba o generalos desde Artículos.</p></div></td></tr>';
+    return;
+  }
+  tb.innerHTML = _etqCola.map(function(item){
+    const art = DB.arts.find(function(a){ return a.id === item.artId; });
+    if(!art) return '';
+    const nombreMostrado = item.nombreOverride != null ? item.nombreOverride : art.nom;
+    const precioCalc = etqPrecioParaLista(art, lista);
+    const precioMostrado = item.precioOverride != null ? item.precioOverride : precioCalc;
+    return '<tr>'+
+      '<td><textarea rows="1" style="width:180px;border:1.5px solid #e5e7eb;border-radius:6px;padding:5px 8px;font-size:13px;resize:none;overflow:hidden;font-family:inherit;line-height:1.3" oninput="this.style.height=\'auto\';this.style.height=this.scrollHeight+\'px\';etqCambiarNombreOverride('+item.artId+',this.value)">'+nombreMostrado.replace(/</g,'&lt;')+'</textarea></td>'+
+      '<td><input type="number" value="'+precioMostrado+'" style="width:100px;border:1.5px solid #e5e7eb;border-radius:6px;padding:5px 8px;font-size:13px" onchange="etqCambiarPrecioOverride('+item.artId+',this.value)"></td>'+
+      '<td><input type="number" min="1" value="'+item.cantidad+'" style="width:60px;border:1.5px solid #e5e7eb;border-radius:6px;padding:5px 8px;font-size:13px" onchange="etqCambiarCantidad('+item.artId+',this.value)"></td>'+
+      '<td><button class="btn br bsm" onclick="etqQuitarDeCola('+item.artId+')">✕</button></td>'+
+    '</tr>';
+  }).join('');
+  document.querySelectorAll('#etq-tbody-cola textarea').forEach(function(ta){
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  });
+}
+
+async function etqCargarPlantilla(){
+  try{
+    const rows = await sbGet('etiquetas_plantillas', `negocio_id=eq.${NEGOCIO_ID}&order=predeterminada.desc,created_at.asc&limit=1`);
+    if(rows && rows.length){
+      const p = rows[0];
+      _etqPlantillaId = p.id;
+      if(p.diseno_json && p.diseno_json.nombre) _etqPosiciones = p.diseno_json;
+      if(p.ancho_mm) document.getElementById('etq-ancho-mm').value = p.ancho_mm;
+      if(p.alto_mm) document.getElementById('etq-alto-mm').value = p.alto_mm;
+    } else {
+      _etqPlantillaId = null;
+    }
+  }catch(e){
+    console.error('Error cargando plantilla de etiquetas:', e);
+  }
+  etqAplicarTamano();
+  etqInicializarDragYResize();
+}
+
+async function etqGuardarPlantilla(){
+  const estado = document.getElementById('etq-guardado-estado');
+  estado.textContent = 'Guardando...';
+  const anchoMm = parseFloat(document.getElementById('etq-ancho-mm').value) || 63;
+  const altoMm = parseFloat(document.getElementById('etq-alto-mm').value) || 33;
+  const body = {
+    negocio_id: NEGOCIO_ID,
+    nombre: 'Plantilla principal',
+    ancho_mm: anchoMm,
+    alto_mm: altoMm,
+    diseno_json: _etqPosiciones,
+    predeterminada: true,
+    updated_at: new Date().toISOString()
+  };
+  try{
+    if(_etqPlantillaId){
+      await sbPatch('etiquetas_plantillas', _etqPlantillaId, body);
+    } else {
+      const creado = await sbPost('etiquetas_plantillas', body);
+      if(creado && creado[0]) _etqPlantillaId = creado[0].id;
+    }
+    estado.textContent = 'Guardado ✓';
+    setTimeout(function(){ estado.textContent = ''; }, 2500);
+  }catch(e){
+    console.error('Error guardando plantilla de etiquetas:', e);
+    estado.textContent = 'Error al guardar';
+  }
+}
+
+function etqAplicarTamano(){
+  const lienzo = document.getElementById('etq-lienzo');
+  if(!lienzo) return;
+  const anchoMm = parseFloat(document.getElementById('etq-ancho-mm').value) || 63;
+  const altoMm = parseFloat(document.getElementById('etq-alto-mm').value) || 33;
+  lienzo.style.width = (anchoMm * ETQ_PX_POR_MM) + 'px';
+  lienzo.style.height = (altoMm * ETQ_PX_POR_MM) + 'px';
+  etqRenderCampos();
+}
+
+function etqRenderCampos(){
+  const lienzo = document.getElementById('etq-lienzo');
+  if(!lienzo) return;
+  document.querySelectorAll('.etq-campo').forEach(function(el){
+    const nombre = el.getAttribute('data-campo');
+    const p = _etqPosiciones[nombre];
+    if(nombre === 'barras'){
+      const minW = ETQ_ANCHO_MIN_BARRAS_MM * ETQ_PX_POR_MM;
+      const minH = ETQ_ALTO_MIN_BARRAS_MM * ETQ_PX_POR_MM;
+      if(p.w < minW) p.w = minW;
+      if(p.h < minH) p.h = minH;
+    }
+    el.style.left = p.x + 'px';
+    el.style.top = p.y + 'px';
+    el.style.width = p.w + 'px';
+    el.style.height = p.h + 'px';
+    const span = el.querySelector('.etq-txt');
+    if(span && p.font) span.style.fontSize = p.font + 'px';
+  });
+  etqDibujarBarras();
+}
+
+function etqDibujarBarras(){
+  const p = _etqPosiciones.barras;
+  const svg = document.getElementById('etq-svg-barras');
+  if(!svg || typeof JsBarcode === 'undefined') return;
+  const anchoBarra = Math.max(1.2, (p.w - 10) / 95);
+  try{
+    JsBarcode(svg, '779034512634', {
+      format: 'EAN13',
+      width: anchoBarra,
+      height: Math.max(18, p.h - 18),
+      displayValue: false,
+      margin: 0
+    });
+  }catch(e){
+    console.error('Error dibujando código de barras:', e);
+  }
+}
+
+function etqSeleccionar(nombre){
+  _etqSeleccionado = nombre;
+  document.querySelectorAll('.etq-campo').forEach(function(el){
+    el.style.outline = el.getAttribute('data-campo') === nombre ? '2px solid #185FA5' : 'none';
+  });
+  const toolbar = document.getElementById('etq-toolbar');
+  const tieneFuente = nombre !== 'barras';
+  toolbar.style.display = tieneFuente ? 'flex' : 'none';
+  if(tieneFuente){
+    document.getElementById('etq-toolbar-label').textContent = nombre === 'nombre' ? 'Tamaño de letra, nombre' : 'Tamaño de letra, precio';
+    document.getElementById('etq-font-out').textContent = _etqPosiciones[nombre].font + 'px';
+  }
+}
+
+function etqCambiarFuente(delta){
+  if(!_etqSeleccionado || _etqSeleccionado === 'barras') return;
+  const p = _etqPosiciones[_etqSeleccionado];
+  p.font = Math.max(9, Math.min(48, p.font + delta));
+  document.getElementById('etq-font-out').textContent = p.font + 'px';
+  etqRenderCampos();
+}
+
+function etqResetPosiciones(){
+  _etqPosiciones = {
+    nombre: { x: 6, y: 6, w: 150, h: 22, font: 13 },
+    precio: { x: 6, y: 32, w: 110, h: 32, font: 22 },
+    barras: { x: 6, y: 68, w: 120, h: 56 }
+  };
+  document.getElementById('etq-toolbar').style.display = 'none';
+  _etqSeleccionado = null;
+  etqRenderCampos();
+}
+
+function etqInicializarDragYResize(){
+  const lienzo = document.getElementById('etq-lienzo');
+  if(!lienzo || lienzo.dataset.etqInit) return;
+  lienzo.dataset.etqInit = '1';
+  document.querySelectorAll('.etq-campo').forEach(function(el){
+    const nombreCampo = el.getAttribute('data-campo');
+    el.addEventListener('pointerdown', function(e){
+      if(e.target.classList.contains('etq-resizer')) return;
+      etqSeleccionar(nombreCampo);
+      const rect = el.getBoundingClientRect();
+      const offX = e.clientX - rect.left;
+      const offY = e.clientY - rect.top;
+      el.style.cursor = 'grabbing';
+      function mover(ev){
+        const lienzoRect = lienzo.getBoundingClientRect();
+        let nx = ev.clientX - lienzoRect.left - offX;
+        let ny = ev.clientY - lienzoRect.top - offY;
+        const p = _etqPosiciones[nombreCampo];
+        nx = Math.max(0, Math.min(nx, lienzo.clientWidth - p.w));
+        ny = Math.max(0, Math.min(ny, lienzo.clientHeight - p.h));
+        p.x = Math.round(nx);
+        p.y = Math.round(ny);
+        etqRenderCampos();
+      }
+      function soltar(){
+        el.style.cursor = 'grab';
+        document.removeEventListener('pointermove', mover);
+        document.removeEventListener('pointerup', soltar);
+      }
+      document.addEventListener('pointermove', mover);
+      document.addEventListener('pointerup', soltar);
+    });
+    const resizer = el.querySelector('.etq-resizer');
+    resizer.addEventListener('pointerdown', function(e){
+      e.stopPropagation();
+      etqSeleccionar(nombreCampo);
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const p = _etqPosiciones[nombreCampo];
+      const startW = p.w;
+      const startH = p.h;
+      function mover(ev){
+        let nw = startW + (ev.clientX - startX);
+        let nh = startH + (ev.clientY - startY);
+        nw = Math.max(20, Math.min(nw, lienzo.clientWidth - p.x));
+        nh = Math.max(14, Math.min(nh, lienzo.clientHeight - p.y));
+        p.w = Math.round(nw);
+        p.h = Math.round(nh);
+        etqRenderCampos();
+      }
+      function soltar(){
+        document.removeEventListener('pointermove', mover);
+        document.removeEventListener('pointerup', soltar);
+      }
+      document.addEventListener('pointermove', mover);
+      document.addEventListener('pointerup', soltar);
+    });
+  });
 }
 
 // Trae el conteo real de productos vendidos en el mes, directo de Supabase.
@@ -2593,6 +3044,24 @@ function deselTodo() {
   _selArt.clear();
   document.querySelectorAll('.art-chk').forEach(function(c){ c.checked = false; });
   actualizarContador();
+}
+
+let _etqCola = [];
+
+function etqPrecioParaLista(art, lista){
+  if(lista==='mayor') return getPrecio(art, 'mayor', art.cm||1);
+  return getPrecio(art, lista, 1);
+}
+
+function generarEtiquetasDesdeArticulos(){
+  if(_selArt.size === 0){ toast('Seleccioná al menos un artículo', 'a'); return; }
+  const seleccionados = DB.arts.filter(a => _selArt.has(a.id));
+  seleccionados.forEach(function(a){
+    if(_etqCola.some(function(item){ return item.artId === a.id; })) return;
+    _etqCola.push({ artId: a.id, cantidad: 1, nombreOverride: null, precioOverride: null });
+  });
+  irA('etiquetas');
+  toast(seleccionados.length + ' artículo' + (seleccionados.length!==1?'s':'') + ' agregado' + (seleccionados.length!==1?'s':'') + ' a la cola de etiquetas', 'v');
 }
 
 function sincronizarCheckboxes() {
