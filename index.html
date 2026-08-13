@@ -933,11 +933,19 @@ tbody td{padding:9px 13px;vertical-align:middle;}
 
 <div class="moverlay" id="m-tarea">
   <div class="modal">
-    <h2>📋 Nueva tarea</h2>
+    <h2 id="tarea-modal-titulo">📋 Nueva tarea</h2>
     <input type="hidden" id="tarea-id">
     <div class="fg" style="margin-bottom:12px">
       <label>Texto de la tarea</label>
       <textarea id="tarea-texto" rows="2" placeholder="Ej: Pedido a proveedor de harinas"></textarea>
+    </div>
+    <div class="fg" style="margin-bottom:12px">
+      <label>Lista de puntos (opcional)</label>
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <input type="text" id="tarea-item-nuevo" placeholder="Ej: Llamar al proveedor" style="flex:1;border:1.5px solid #e5e7eb;border-radius:8px;padding:8px 11px;font-family:'DM Sans',sans-serif;font-size:14px;background:var(--crema);outline:none" onkeydown="if(event.key==='Enter'){event.preventDefault();agregarItemTarea();}">
+        <button type="button" class="btn bv bsm" onclick="agregarItemTarea()">➕</button>
+      </div>
+      <div id="tarea-items-lista"></div>
     </div>
     <div class="fgrid">
       <div class="fg">
@@ -1956,7 +1964,7 @@ async function _syncSupabase(tipo, data, esReintento=false) {
         categoria: data.categoria, prioridad: data.prioridad,
         asignado_a: data.asignadoA, asignado_nom: data.asignadoNom,
         creado_por: data.creadoPor, creado_por_nom: data.creadoPorNom,
-        hecha: false, es_plantilla: data.esPlantilla
+        hecha: false, es_plantilla: data.esPlantilla, items: data.items || []
       });
       if (res[0]) data.id = res[0].id; // reemplaza el id local temporal por el UUID real
     } else if (tipo === 'mensaje_new') {
@@ -5121,13 +5129,16 @@ let MENSAJES = [];
 
 // Convierte una fila de la tabla 'tareas' de Supabase al formato que usa el módulo
 function _mapTareaSB(t) {
+  let items = [];
+  if (Array.isArray(t.items)) items = t.items;
+  else if (typeof t.items === 'string' && t.items) { try { items = JSON.parse(t.items); } catch(e) { items = []; } }
   return {
     id: t.id, fecha: t.fecha, texto: t.texto,
     categoria: t.categoria || 'General', prioridad: t.prioridad || 'normal',
     asignadoA: t.asignado_a || null, asignadoNom: t.asignado_nom || null,
     creadoPor: t.creado_por, creadoPorNom: t.creado_por_nom,
     hecha: !!t.hecha, hechaPor: t.hecha_por || null, hechaNom: t.hecha_nom || null, hechaEn: t.hecha_en || null,
-    esPlantilla: !!t.es_plantilla
+    esPlantilla: !!t.es_plantilla, items: items
   };
 }
 // Convierte una fila de la tabla 'mensajes' de Supabase al formato que usa el módulo
@@ -5231,17 +5242,33 @@ function renderChecklist(){
     const puedeEditar = esAdmin() || t.creadoPor===_sesion._uuid;
     const asigNom = t.asignadoA===null ? 'Todos' : (t.asignadoA===_sesion._uuid ? 'Vos' : (t.asignadoNom||'—'));
     const prio = t.prioridad==='importante' ? '<span class="bdg br2">⚠️ Importante</span>' : '';
+    const items = t.items || [];
+    const progreso = items.length ? '<span class="bdg bt2">☑ '+items.filter(function(i){return i.hecha;}).length+'/'+items.length+'</span>' : '';
+    const itemsHtml = items.length ? (
+      '<div style="margin-top:6px;padding-left:2px;border-left:2px solid #f0f0f0">' +
+        items.map(function(it,idx){
+          return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0 3px 8px;font-size:13px'+(it.hecha?';opacity:0.55':'')+'">' +
+            '<input type="checkbox" '+(it.hecha?'checked':'')+' onchange="toggleItemTarea(\''+t.id+'\','+idx+')" style="transform:scale(0.85)">' +
+            '<span style="'+(it.hecha?'text-decoration:line-through':'')+'">'+it.texto.replace(/</g,'&lt;')+'</span>' +
+          '</div>';
+        }).join('') +
+      '</div>'
+    ) : '';
     return '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 4px;border-bottom:1px solid #f0f0f0'+(t.hecha?';opacity:0.55':'')+'">' +
       '<input type="checkbox" '+(t.hecha?'checked':'')+' onchange="toggleTareaHecha(\''+t.id+'\')" style="margin-top:3px">' +
       '<div style="flex:1">' +
         '<div style="'+(t.hecha?'text-decoration:line-through':'')+'">'+t.texto+'</div>' +
         '<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">' +
-          '<span class="bdg bv2">'+t.categoria+'</span>'+prio+
+          '<span class="bdg bv2">'+t.categoria+'</span>'+prio+progreso+
           '<span class="bdg bt2">👤 '+asigNom+'</span>'+
           (t.hecha?'<span class="bdg bv2">✔ '+(t.hechaNom||'')+'</span>':'')+
         '</div>' +
+        itemsHtml +
       '</div>' +
-      (puedeEditar?'<button class="btn br bsm" onclick="borrarTarea(\''+t.id+'\')">🗑️</button>':'') +
+      (puedeEditar?'<div style="display:flex;flex-direction:column;gap:4px">'+
+        '<button class="btn bg bsm" onclick="abrirEditarTarea(\''+t.id+'\')">✏️</button>'+
+        '<button class="btn br bsm" onclick="borrarTarea(\''+t.id+'\')">🗑️</button>'+
+      '</div>':'') +
     '</div>';
   }).join('');
 }
@@ -5250,18 +5277,48 @@ async function toggleTareaHecha(id){
   const t = TAREAS.find(function(x){return x.id===id;});
   if(!t) return;
   t.hecha = !t.hecha;
+  // Si la tarea tiene sub-puntos, marcar/desmarcar la tarea entera arrastra todos los puntos
+  if(t.items && t.items.length){
+    t.items.forEach(function(it){ it.hecha = t.hecha; });
+  }
   t.hechaPor = t.hecha ? _sesion._uuid : null;
   t.hechaNom = t.hecha ? _sesion.nom : null;
   t.hechaEn = t.hecha ? new Date().toISOString() : null;
   renderChecklist();
   guardarTareas();
   try {
-    await sbPatch('tareas', t.id, { hecha: t.hecha, hecha_por: t.hechaPor, hecha_nom: t.hechaNom, hecha_en: t.hechaEn });
+    await sbPatch('tareas', t.id, { hecha: t.hecha, hecha_por: t.hechaPor, hecha_nom: t.hechaNom, hecha_en: t.hechaEn, items: t.items || [] });
   } catch(e) {
     console.warn('Error al actualizar tarea en Supabase:', e);
     toast('No se pudo guardar el cambio, revisá la conexión', 'a');
   }
   if(t.hecha && typeof DB!=='undefined' && DB.bitacora){
+    DB.bitacora.push({ts:Date.now(), tipo:'tarea', usr:_sesion.nom, det:'Completó tarea: '+t.texto});
+    saveDB();
+  }
+}
+
+// Tilda/destilda un punto individual de la lista dentro de una tarea.
+// Si con este cambio quedan todos los puntos tildados, la tarea completa se marca como hecha
+// automáticamente (y al revés: si se destilda un punto, la tarea vuelve a quedar pendiente).
+async function toggleItemTarea(id, idx){
+  const t = TAREAS.find(function(x){return x.id===id;});
+  if(!t || !t.items || !t.items[idx]) return;
+  t.items[idx].hecha = !t.items[idx].hecha;
+  const todasHechas = t.items.every(function(it){return it.hecha;});
+  t.hecha = todasHechas;
+  t.hechaPor = todasHechas ? _sesion._uuid : null;
+  t.hechaNom = todasHechas ? _sesion.nom : null;
+  t.hechaEn = todasHechas ? new Date().toISOString() : null;
+  renderChecklist();
+  guardarTareas();
+  try {
+    await sbPatch('tareas', t.id, { items: t.items, hecha: t.hecha, hecha_por: t.hechaPor, hecha_nom: t.hechaNom, hecha_en: t.hechaEn });
+  } catch(e) {
+    console.warn('Error al actualizar punto de la tarea en Supabase:', e);
+    toast('No se pudo guardar el cambio, revisá la conexión', 'a');
+  }
+  if(todasHechas && typeof DB!=='undefined' && DB.bitacora){
     DB.bitacora.push({ts:Date.now(), tipo:'tarea', usr:_sesion.nom, det:'Completó tarea: '+t.texto});
     saveDB();
   }
@@ -5280,13 +5337,52 @@ async function borrarTarea(id){
   }
 }
 
+// Puntos del checklist que se está armando en el modal de nueva tarea (se resetea al abrir/cerrar)
+let _tareaItemsForm = [];
+
+function renderItemsFormTarea(){
+  const cont = document.getElementById('tarea-items-lista');
+  if(!cont) return;
+  if(!_tareaItemsForm.length){ cont.innerHTML=''; return; }
+  cont.innerHTML = _tareaItemsForm.map(function(it,idx){
+    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0">' +
+      '<input type="checkbox" '+(it.hecha?'checked':'')+' onchange="toggleItemFormTarea('+idx+')" title="Marcar como ya hecho">' +
+      '<span style="flex:1;font-size:13px'+(it.hecha?';text-decoration:line-through;opacity:0.55':'')+'">'+(idx+1)+'. '+it.texto.replace(/</g,'&lt;')+'</span>' +
+      '<button type="button" class="btn br bsm" onclick="quitarItemTarea('+idx+')">🗑️</button>' +
+    '</div>';
+  }).join('');
+}
+function agregarItemTarea(){
+  const inp = document.getElementById('tarea-item-nuevo');
+  const texto = inp.value.trim();
+  if(!texto) return;
+  _tareaItemsForm.push({texto:texto, hecha:false});
+  inp.value='';
+  renderItemsFormTarea();
+  inp.focus();
+}
+function quitarItemTarea(idx){
+  _tareaItemsForm.splice(idx,1);
+  renderItemsFormTarea();
+}
+// Tilda/destilda un punto mientras todavía se está armando la lista (antes de guardar la tarea)
+function toggleItemFormTarea(idx){
+  if(!_tareaItemsForm[idx]) return;
+  _tareaItemsForm[idx].hecha = !_tareaItemsForm[idx].hecha;
+  renderItemsFormTarea();
+}
+
 function abrirNuevaTarea(){
+  document.getElementById('tarea-modal-titulo').textContent = '📋 Nueva tarea';
   document.getElementById('tarea-id').value='';
   document.getElementById('tarea-texto').value='';
   document.getElementById('tarea-cat').value='General';
   document.getElementById('tarea-prioridad').value='normal';
   document.getElementById('tarea-fecha').value=_fechaChecklist;
   document.getElementById('tarea-plantilla').checked=false;
+  document.getElementById('tarea-item-nuevo').value='';
+  _tareaItemsForm = [];
+  renderItemsFormTarea();
   const sel = document.getElementById('tarea-asignado');
   let opts = '<option value="">Yo mismo</option><option value="todos">Todos (general)</option>';
   opts += DB.usrs.filter(function(u){return u._uuid!==_sesion._uuid && u.activo!==false;}).map(function(u){return '<option value="'+u._uuid+'">'+u.nom+'</option>';}).join('');
@@ -5294,9 +5390,35 @@ function abrirNuevaTarea(){
   abrir('m-tarea');
 }
 
+// Abre el mismo modal pero precargado con los datos de una tarea ya existente, para editarla.
+function abrirEditarTarea(id){
+  const t = TAREAS.find(function(x){return x.id===id;});
+  if(!t) return;
+  document.getElementById('tarea-modal-titulo').textContent = '✏️ Editar tarea';
+  document.getElementById('tarea-id').value = t.id;
+  document.getElementById('tarea-texto').value = t.texto;
+  document.getElementById('tarea-cat').value = t.categoria;
+  document.getElementById('tarea-prioridad').value = t.prioridad;
+  document.getElementById('tarea-fecha').value = t.fecha;
+  document.getElementById('tarea-plantilla').checked = !!t.esPlantilla;
+  document.getElementById('tarea-item-nuevo').value = '';
+  // Copia de los puntos (no la referencia), para no tocar la tarea real hasta que se guarde
+  _tareaItemsForm = (t.items || []).map(function(it){ return { texto: it.texto, hecha: !!it.hecha }; });
+  renderItemsFormTarea();
+  const sel = document.getElementById('tarea-asignado');
+  let opts = '<option value="">Yo mismo</option><option value="todos">Todos (general)</option>';
+  opts += DB.usrs.filter(function(u){return u._uuid!==_sesion._uuid && u.activo!==false;}).map(function(u){return '<option value="'+u._uuid+'">'+u.nom+'</option>';}).join('');
+  sel.innerHTML = opts;
+  if (t.asignadoA===null) sel.value = 'todos';
+  else if (t.asignadoA===_sesion._uuid) sel.value = '';
+  else sel.value = t.asignadoA;
+  abrir('m-tarea');
+}
+
 async function guardarTarea(){
   const texto = document.getElementById('tarea-texto').value.trim();
   if(!texto){ toast('Escribí el texto de la tarea','a'); return; }
+  const idExistente = document.getElementById('tarea-id').value;
   const asigVal = document.getElementById('tarea-asignado').value;
   let asignadoA = null, asignadoNom = null;
   if(asigVal==='todos'){ asignadoA=null; }
@@ -5306,12 +5428,45 @@ async function guardarTarea(){
   const categoria = document.getElementById('tarea-cat').value;
   const prioridad = document.getElementById('tarea-prioridad').value;
   const esPlantilla = document.getElementById('tarea-plantilla').checked;
+  const items = _tareaItemsForm.slice();
   cerrar('m-tarea');
+
+  // Si tarea-id tiene valor, estamos editando una tarea que ya existía (no creando una nueva)
+  if (idExistente) {
+    const t = TAREAS.find(function(x){return x.id===idExistente;});
+    if (!t) return;
+    t.texto = texto; t.categoria = categoria; t.prioridad = prioridad; t.fecha = fecha;
+    t.asignadoA = asignadoA; t.asignadoNom = asignadoNom; t.esPlantilla = esPlantilla;
+    t.items = items;
+    // Si tiene puntos, la tarea queda hecha o no según si están todos tildados (misma regla que al tildar uno)
+    if (items.length) {
+      const todasHechas = items.every(function(it){return it.hecha;});
+      t.hecha = todasHechas;
+      t.hechaPor = todasHechas ? _sesion._uuid : null;
+      t.hechaNom = todasHechas ? _sesion.nom : null;
+      t.hechaEn = todasHechas ? new Date().toISOString() : null;
+    }
+    renderChecklist();
+    guardarTareas();
+    toast('Tarea actualizada','v');
+    try {
+      await sbPatch('tareas', t.id, {
+        fecha: t.fecha, texto: t.texto, categoria: t.categoria, prioridad: t.prioridad,
+        asignado_a: t.asignadoA, asignado_nom: t.asignadoNom, es_plantilla: t.esPlantilla,
+        items: t.items, hecha: t.hecha, hecha_por: t.hechaPor, hecha_nom: t.hechaNom, hecha_en: t.hechaEn
+      });
+    } catch(e) {
+      console.warn('Error al actualizar tarea en Supabase:', e);
+      toast('No se pudo guardar el cambio, revisá la conexión', 'a');
+    }
+    return;
+  }
+
   // Guardado local primero: la tarea existe en pantalla aunque falle la sync
   const tarea = {
     id: 'local-' + Date.now(), fecha, texto, categoria, prioridad,
     asignadoA, asignadoNom, creadoPor: _sesion._uuid, creadoPorNom: _sesion.nom,
-    hecha: false, hechaPor: null, hechaNom: null, hechaEn: null, esPlantilla
+    hecha: false, hechaPor: null, hechaNom: null, hechaEn: null, esPlantilla, items
   };
   TAREAS.push(tarea);
   guardarTareas();
@@ -5354,7 +5509,8 @@ async function insertarPlantilla(idPlantilla){
     const filas = await sbPost('tareas', {
       negocio_id: NEGOCIO_ID, fecha:_fechaChecklist, texto:base.texto, categoria:base.categoria,
       prioridad:base.prioridad, asignado_a:base.asignadoA, asignado_nom:base.asignadoNom,
-      creado_por:_sesion._uuid, creado_por_nom:_sesion.nom, hecha:false, es_plantilla:false
+      creado_por:_sesion._uuid, creado_por_nom:_sesion.nom, hecha:false, es_plantilla:false,
+      items: (base.items||[]).map(function(it){return {texto:it.texto, hecha:false};})
     });
     TAREAS.push(_mapTareaSB(filas[0]));
     guardarTareas();
@@ -5384,7 +5540,8 @@ async function confirmarCopiarDia(){
     return {
       negocio_id: NEGOCIO_ID, fecha:destino, texto:t.texto, categoria:t.categoria,
       prioridad:t.prioridad, asignado_a:t.asignadoA, asignado_nom:t.asignadoNom,
-      creado_por:_sesion._uuid, creado_por_nom:_sesion.nom, hecha:false, es_plantilla:false
+      creado_por:_sesion._uuid, creado_por_nom:_sesion.nom, hecha:false, es_plantilla:false,
+      items: (t.items||[]).map(function(it){return {texto:it.texto, hecha:false};})
     };
   });
   cerrar('m-copiar-dia');
