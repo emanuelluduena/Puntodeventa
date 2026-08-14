@@ -829,10 +829,12 @@ tbody td{padding:9px 13px;vertical-align:middle;}
         </select>
       </div>
     </div>
+    <div class="brow" id="tareas-cats-rapidas"></div>
     <div class="brow">
       <button class="btn bv bsm" onclick="abrirNuevaTarea()">➕ Nueva tarea</button>
       <button class="btn bg bsm" onclick="abrirPlantillas()">📌 Plantillas</button>
       <button class="btn bg bsm" onclick="abrirCopiarDia()">📅 Copiar este día a...</button>
+      <button class="btn bg bsm" onclick="abrirGestionCategorias()">⚙️ Editar checklists</button>
     </div>
     <div id="lista-checklist" style="margin-top:14px"></div>
   </div>
@@ -941,8 +943,8 @@ tbody td{padding:9px 13px;vertical-align:middle;}
     </div>
     <div class="fg" style="margin-bottom:12px">
       <label>Lista de puntos (opcional)</label>
-      <div style="display:flex;gap:6px;margin-bottom:8px">
-        <input type="text" id="tarea-item-nuevo" placeholder="Ej: Llamar al proveedor" style="flex:1;border:1.5px solid #e5e7eb;border-radius:8px;padding:8px 11px;font-family:'DM Sans',sans-serif;font-size:14px;background:var(--crema);outline:none" onkeydown="if(event.key==='Enter'){event.preventDefault();agregarItemTarea();}">
+      <div style="display:flex;gap:6px;margin-bottom:8px;align-items:flex-end">
+        <textarea id="tarea-item-nuevo" rows="1" placeholder="Ej: Llamar al proveedor" style="flex:1;border:1.5px solid #e5e7eb;border-radius:8px;padding:8px 11px;font-family:'DM Sans',sans-serif;font-size:14px;background:var(--crema);outline:none;resize:none;overflow:hidden;line-height:1.4;max-height:160px" onkeydown="if(event.key==='Enter'){event.preventDefault();agregarItemTarea();}" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,160)+'px';"></textarea>
         <button type="button" class="btn bv bsm" onclick="agregarItemTarea()">➕</button>
       </div>
       <div id="tarea-items-lista"></div>
@@ -952,8 +954,6 @@ tbody td{padding:9px 13px;vertical-align:middle;}
         <label>Categoría</label>
         <select id="tarea-cat">
           <option value="General">General</option>
-          <option value="Apertura">Apertura</option>
-          <option value="Cierre">Cierre</option>
           <option value="Pedidos">Pedidos</option>
           <option value="Limpieza">Limpieza</option>
         </select>
@@ -980,6 +980,21 @@ tbody td{padding:9px 13px;vertical-align:middle;}
     <div class="mfoot">
       <button class="btn bg" onclick="cerrar('m-tarea')">Cancelar</button>
       <button class="btn bv" onclick="guardarTarea()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div class="moverlay" id="m-categorias">
+  <div class="modal">
+    <h2>⚙️ Checklists rápidas</h2>
+    <p style="font-size:13px;color:var(--gris);margin-bottom:10px">Estos son los botones de acceso rápido que aparecen arriba de las tareas del día. Podés agregar los que necesites (ej: "Tareas de 14 a 16hs") o borrar los que no uses.</p>
+    <div id="lista-categorias" style="margin-bottom:12px"></div>
+    <div style="display:flex;gap:6px">
+      <input type="text" id="categoria-nueva" placeholder="Ej: Tareas de la mañana" style="flex:1;border:1.5px solid #e5e7eb;border-radius:8px;padding:8px 11px;font-family:'DM Sans',sans-serif;font-size:14px;background:var(--crema);outline:none" onkeydown="if(event.key==='Enter'){event.preventDefault();agregarCategoriaTarea();}">
+      <button type="button" class="btn bv bsm" onclick="agregarCategoriaTarea()">➕ Agregar</button>
+    </div>
+    <div class="mfoot">
+      <button class="btn bg" onclick="cerrar('m-categorias')">Cerrar</button>
     </div>
   </div>
 </div>
@@ -1552,6 +1567,9 @@ async function cargarDesdeSupabase(negId) {
         nombre: n.nombre || '', slogan: n.slogan || '', dir: n.direccion || '',
         tel: n.telefono || '', email: n.email || '', cuit: n.cuit || '', logo: n.logo_url || null
       };
+      if (Array.isArray(n.categorias_tareas) && n.categorias_tareas.length) {
+        CATEGORIAS_TAREAS = n.categorias_tareas;
+      }
     }
   } catch(e) { console.warn('Error cargando configuración del negocio:', e); }
 
@@ -2345,9 +2363,15 @@ function cerrar(id) { document.getElementById(id).classList.remove('open'); }
 function abrir(id) { document.getElementById(id).classList.add('open'); }
 document.querySelectorAll('.moverlay').forEach(m => m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); }));
 
-// Mostrar login al cargar
+// Mostrar login al cargar (pero no si hay una sesión guardada válida: en ese caso
+// arrancarSistema() la va a restaurar solo, y no hace falta mostrar el login de paso)
 window.addEventListener('load', function() {
-  if(!_sesion) mostrarLogin();
+  if(_sesion) return;
+  const _sesG = localStorage.getItem('sesionActiva');
+  const _tokG = localStorage.getItem('sesionToken');
+  const _expG = Number(localStorage.getItem('sesionTokenExp') || 0);
+  const _haySesionGuardadaValida = _sesG && _tokG && Date.now() < _expG;
+  if (!_haySesionGuardadaValida) mostrarLogin();
 });
 
 
@@ -2415,6 +2439,7 @@ function irA(tab) {
     const modEl = document.getElementById('mod-'+tab);
     if (tabEl) tabEl.classList.add('activo');
     if (modEl) modEl.classList.add('activo');
+    try { localStorage.setItem('ultimoModulo', tab); } catch(e){}
     const firmaActual = _firma(tab);
     const debeRender = _siempreRender.has(tab)
       || firmaActual === null
@@ -5126,6 +5151,10 @@ function toggleUsaPM(id, chk) {
 // esto a una tabla de Supabase (es otro paso, avisame cuando lo quieras encarar).
 let TAREAS = [];
 let MENSAJES = [];
+// Categorías de checklist rápido para Tareas (ej: "Tareas de apertura"). Se guardan en la
+// fila del negocio en Supabase (columna categorias_tareas) para que se vean igual desde
+// cualquier computadora que entre al sistema.
+let CATEGORIAS_TAREAS = ['Tareas de apertura', 'Tareas durante el turno', 'Tareas durante el cierre'];
 
 // Convierte una fila de la tabla 'tareas' de Supabase al formato que usa el módulo
 function _mapTareaSB(t) {
@@ -5201,6 +5230,7 @@ let _fechaChecklist = hoy();
 let _contactoActivo = null;
 
 function renderTareas(){
+  renderCategoriasRapidas();
   renderChecklist();
 }
 
@@ -5358,6 +5388,7 @@ function agregarItemTarea(){
   if(!texto) return;
   _tareaItemsForm.push({texto:texto, hecha:false});
   inp.value='';
+  inp.style.height='';
   renderItemsFormTarea();
   inp.focus();
 }
@@ -5372,15 +5403,100 @@ function toggleItemFormTarea(idx){
   renderItemsFormTarea();
 }
 
+// ───────── CATEGORÍAS DE CHECKLIST RÁPIDO ─────────
+function _iconoCategoria(nombre){
+  const n = (nombre||'').toLowerCase();
+  if(n.indexOf('apertura')>-1) return '🌅';
+  if(n.indexOf('turno')>-1) return '☀️';
+  if(n.indexOf('cierre')>-1) return '🌙';
+  return '📋';
+}
+function renderCategoriasRapidas(){
+  const cont = document.getElementById('tareas-cats-rapidas');
+  if(!cont) return;
+  if(!CATEGORIAS_TAREAS.length){ cont.innerHTML=''; return; }
+  cont.innerHTML = '<span style="font-size:12px;color:var(--gris);font-weight:600">Checklists rápidas:</span>' +
+    CATEGORIAS_TAREAS.map(function(c){
+      const seguro = c.replace(/'/g,"\\'").replace(/"/g,'&quot;');
+      return '<button class="btn bt bsm" onclick="abrirTareaRapida(\''+seguro+'\')">'+_iconoCategoria(c)+' '+c.replace(/</g,'&lt;')+'</button>';
+    }).join('');
+}
+function renderCategoriaSelect(seleccionActual){
+  const sel = document.getElementById('tarea-cat');
+  if(!sel) return;
+  const fijas = ['General','Pedidos','Limpieza'];
+  let valores = fijas.slice();
+  CATEGORIAS_TAREAS.forEach(function(c){ if(valores.indexOf(c)===-1) valores.push(c); });
+  if(seleccionActual && valores.indexOf(seleccionActual)===-1) valores.push(seleccionActual);
+  sel.innerHTML = valores.map(function(v){
+    return '<option value="'+v.replace(/"/g,'&quot;')+'">'+v.replace(/</g,'&lt;')+'</option>';
+  }).join('');
+}
+function abrirTareaRapida(categoria){
+  abrirNuevaTarea();
+  document.getElementById('tarea-cat').value = categoria;
+  document.getElementById('tarea-texto').value = categoria;
+  setTimeout(function(){
+    const inp = document.getElementById('tarea-item-nuevo');
+    if(inp) inp.focus();
+  }, 50);
+}
+function abrirGestionCategorias(){
+  renderListaCategorias();
+  document.getElementById('categoria-nueva').value = '';
+  abrir('m-categorias');
+}
+function renderListaCategorias(){
+  const cont = document.getElementById('lista-categorias');
+  if(!cont) return;
+  if(!CATEGORIAS_TAREAS.length){ cont.innerHTML = '<div class="vacio"><div class="vi">⚙️</div><p>No hay checklists rápidas todavía</p></div>'; return; }
+  cont.innerHTML = CATEGORIAS_TAREAS.map(function(c, idx){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #f0f0f0">' +
+      '<span>'+_iconoCategoria(c)+' '+c.replace(/</g,'&lt;')+'</span>' +
+      '<button class="btn br bsm" onclick="borrarCategoriaTarea('+idx+')">🗑️</button>' +
+    '</div>';
+  }).join('');
+}
+function agregarCategoriaTarea(){
+  const inp = document.getElementById('categoria-nueva');
+  const nombre = inp.value.trim();
+  if(!nombre) return;
+  if(CATEGORIAS_TAREAS.indexOf(nombre)>-1){ toast('Esa checklist ya existe','a'); return; }
+  CATEGORIAS_TAREAS.push(nombre);
+  inp.value='';
+  renderListaCategorias();
+  renderCategoriasRapidas();
+  guardarCategoriasTareas();
+  inp.focus();
+}
+async function borrarCategoriaTarea(idx){
+  if(!await confirmar('¿Borrar esta checklist rápida? (las tareas ya creadas con esta categoría no se borran)')) return;
+  CATEGORIAS_TAREAS.splice(idx,1);
+  renderListaCategorias();
+  renderCategoriasRapidas();
+  guardarCategoriasTareas();
+}
+async function guardarCategoriasTareas(){
+  if(!NEGOCIO_ID) return;
+  try {
+    await sbPatch('negocios', NEGOCIO_ID, { categorias_tareas: CATEGORIAS_TAREAS });
+  } catch(e) {
+    console.warn('Error al guardar checklists rápidas en Supabase:', e);
+    toast('No se pudo guardar el cambio, revisá la conexión','a');
+  }
+}
+
 function abrirNuevaTarea(){
   document.getElementById('tarea-modal-titulo').textContent = '📋 Nueva tarea';
   document.getElementById('tarea-id').value='';
   document.getElementById('tarea-texto').value='';
+  renderCategoriaSelect('General');
   document.getElementById('tarea-cat').value='General';
   document.getElementById('tarea-prioridad').value='normal';
   document.getElementById('tarea-fecha').value=_fechaChecklist;
   document.getElementById('tarea-plantilla').checked=false;
   document.getElementById('tarea-item-nuevo').value='';
+  document.getElementById('tarea-item-nuevo').style.height='';
   _tareaItemsForm = [];
   renderItemsFormTarea();
   const sel = document.getElementById('tarea-asignado');
@@ -5397,11 +5513,13 @@ function abrirEditarTarea(id){
   document.getElementById('tarea-modal-titulo').textContent = '✏️ Editar tarea';
   document.getElementById('tarea-id').value = t.id;
   document.getElementById('tarea-texto').value = t.texto;
+  renderCategoriaSelect(t.categoria);
   document.getElementById('tarea-cat').value = t.categoria;
   document.getElementById('tarea-prioridad').value = t.prioridad;
   document.getElementById('tarea-fecha').value = t.fecha;
   document.getElementById('tarea-plantilla').checked = !!t.esPlantilla;
   document.getElementById('tarea-item-nuevo').value = '';
+  document.getElementById('tarea-item-nuevo').style.height = '';
   // Copia de los puntos (no la referencia), para no tocar la tarea real hasta que se guarde
   _tareaItemsForm = (t.items || []).map(function(it){ return { texto: it.texto, hecha: !!it.hecha }; });
   renderItemsFormTarea();
@@ -6580,7 +6698,12 @@ async function arrancarSistema() {
           document.getElementById('usr-badge-nom').textContent = _sesion.nom;
           aplicarPermisosMenues();
           aplicarConfig();
-          renderInicio();
+          const _modGuardado = localStorage.getItem('ultimoModulo') || 'inicio';
+          if (_modGuardado !== 'inicio' && typeof tienePermiso === 'function' && tienePermiso(_modGuardado) && document.getElementById('mod-'+_modGuardado)) {
+            irA(_modGuardado);
+          } else {
+            renderInicio();
+          }
           document.getElementById('splash-screen').style.display = 'none';
           toast('✅ ' + _sesion.nom + ' — Datos cargados', 'v');
           const nBajo = DB.arts.filter(function(a){return a.usastk!=='no'&&a.stk<=a.stkmin;}).length;
@@ -6908,6 +7031,37 @@ delUsr = async function(id) {
     await _syncSupabase('usr_del', usr);
   }
 };
+
+// ═══ Actualizar datos con F5 sin recargar toda la página (para no perder la pantalla en la que se está) ═══
+let _actualizandoConF5 = false;
+async function actualizarDatosSinRecargar() {
+  if (!_sesion || !NEGOCIO_ID || _actualizandoConF5) return;
+  _actualizandoConF5 = true;
+  try {
+    toast('🔄 Actualizando datos...', 'i');
+    DB = await cargarDesdeSupabase(NEGOCIO_ID);
+    aplicarConfig();
+    const tabEl = document.querySelector('.tab.activo');
+    const tabActivo = tabEl ? tabEl.getAttribute('data-tab') : 'inicio';
+    renderMod(tabActivo);
+    await cargarTareasYMensajes();
+    await cargarHorariosYFichajes();
+    toast('✅ Datos actualizados', 'v');
+  } catch(e) {
+    console.warn('Error actualizando datos con F5:', e);
+    toast('No se pudo actualizar, revisá la conexión', 'a');
+  } finally {
+    _actualizandoConF5 = false;
+  }
+}
+document.addEventListener('keydown', function(e) {
+  const esF5 = (e.key === 'F5' || e.keyCode === 116);
+  const esCtrlR = (e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R');
+  if ((esF5 || esCtrlR) && _sesion) {
+    e.preventDefault();
+    actualizarDatosSinRecargar();
+  }
+});
 
 // Arrancar
 arrancarSistema();
