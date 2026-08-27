@@ -1946,8 +1946,17 @@ async function _syncSupabase(tipo, data, esReintento=false) {
       if (res[0]) {
         data._uuid = res[0].id;
         // Re-hashear de inmediato: el insert de arriba deja el password en texto plano un instante,
-        // esta llamada lo reemplaza por el hash real (crypt/bcrypt) antes de que quede persistido así.
-        await sbRpc('set_password_usuario', { p_user_id: res[0].id, p_password: data.pass });
+        // esta llamada (vía Edge Function, valida que quien la pide sea Administrador) lo
+        // reemplaza por el hash real (crypt/bcrypt) antes de que quede persistido así.
+        const respHash = await fetch(`${SB_URL}/functions/v1/admin-set-password`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken()}` },
+          body: JSON.stringify({ targetUserId: res[0].id, newPassword: data.pass })
+        });
+        if (!respHash.ok) {
+          const dataHash = await respHash.json().catch(()=>({}));
+          throw new Error(dataHash.error || 'No se pudo hashear la contraseña del usuario nuevo');
+        }
       }
     } else if (tipo === 'usr_update' && data._uuid) {
       await sbPatch('usuarios', data._uuid, {
@@ -2548,7 +2557,7 @@ function etqGenerarBarcodeSVG(codigo){
   if(!codigo) return null;
   try{
     const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
-    JsBarcode(svg, codigo, { format: codigo.length===13?'EAN13':'CODE128', width: 1.6, height: 40, displayValue: false, margin: 0 });
+    JsBarcode(svg, codigo, { format: codigo.length===13?'EAN13':'CODE128', width: 1.6, height: 40, displayValue: true, fontSize: 12, margin: 0 });
     return new XMLSerializer().serializeToString(svg);
   }catch(e){
     console.error('Error generando código de barras para impresión:', e);
@@ -2578,7 +2587,7 @@ function etqImprimir(){
     const unaEtiqueta =
       '<div class="etq-print-label" style="width:'+anchoMm+'mm;height:'+altoMm+'mm">'+
         '<div class="etq-fit" style="position:absolute;left:'+(pN.x/ETQ_PX_POR_MM)+'mm;top:'+(pN.y/ETQ_PX_POR_MM)+'mm;width:'+(pN.w/ETQ_PX_POR_MM)+'mm;overflow:visible;display:block"><span style="font-size:'+(pN.font/ETQ_PX_POR_MM)+'mm;white-space:normal;font-weight:600;word-break:break-word;display:block;line-height:1.15">'+nombreMostrado+'</span></div>'+
-        '<div class="etq-fit-precio" style="position:absolute;left:'+(pP.x/ETQ_PX_POR_MM)+'mm;top:'+(pP.y/ETQ_PX_POR_MM)+'mm;width:'+(pP.w/ETQ_PX_POR_MM)+'mm;height:'+(pP.h/ETQ_PX_POR_MM)+'mm;overflow:hidden;display:flex;align-items:center;min-width:0"><span style="font-size:'+(pP.font/ETQ_PX_POR_MM)+'mm;white-space:nowrap;font-weight:700;display:inline-block;max-width:100%">'+fmt(precioMostrado)+'</span></div>'+
+        '<div class="etq-fit-precio" style="position:absolute;left:'+(pP.x/ETQ_PX_POR_MM)+'mm;top:'+(pP.y/ETQ_PX_POR_MM)+'mm;width:'+(pP.w/ETQ_PX_POR_MM)+'mm;height:'+(pP.h/ETQ_PX_POR_MM)+'mm;overflow:hidden;display:flex;align-items:center;justify-content:center;min-width:0"><span style="font-size:'+(pP.font/ETQ_PX_POR_MM)+'mm;white-space:nowrap;font-weight:700;display:inline-block;max-width:100%">'+fmt(precioMostrado)+'</span></div>'+
         '<div style="position:absolute;left:'+(pB.x/ETQ_PX_POR_MM)+'mm;top:'+(pB.y/ETQ_PX_POR_MM)+'mm;width:'+(pB.w/ETQ_PX_POR_MM)+'mm;height:'+(pB.h/ETQ_PX_POR_MM)+'mm;display:flex;flex-direction:column;align-items:center;justify-content:center">'+
           (barcodeSvg || '<span style="font-size:9px;color:#999">Sin código</span>')+
         '</div>'+
@@ -3416,7 +3425,13 @@ async function guardarPasswordUsr(){
   saveDB();
   if(NEGOCIO_ID && u._uuid){
     try{
-      await sbRpc('set_password_usuario', {p_user_id:u._uuid, p_password:nueva});
+      const respCambio = await fetch(`${SB_URL}/functions/v1/admin-set-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken()}` },
+        body: JSON.stringify({ targetUserId: u._uuid, newPassword: nueva })
+      });
+      const dataCambio = await respCambio.json();
+      if (!respCambio.ok) throw new Error(dataCambio.error || 'Error al cambiar la contraseña');
       toast('Contraseña actualizada','v');
     }catch(e){
       toast('Error al actualizar la contraseña','r');
