@@ -1447,6 +1447,7 @@ tbody td{padding:9px 13px;vertical-align:middle;}
 const SB_URL = "https://yabschiaphpiozajnwxx.supabase.co";
 const SB_KEY = "sb_publishable_BZlDsQFy_PFTx-01ZYt7rg_FN4IqLB5";
 const ALERTAS_URL = `${SB_URL}/functions/v1/alertas-soporte`;
+const DEMO_LOGIN_EVENTO_URL = `${SB_URL}/functions/v1/demo-login-evento`;
 const sbClient = (typeof supabase !== 'undefined') ? supabase.createClient(SB_URL, SB_KEY) : null;
 let _mensajesChannel = null;
 
@@ -1463,6 +1464,18 @@ async function avisarSoporte(tipo, mensaje) {
         negocio_nombre: (typeof DB !== 'undefined' && DB && DB.config && DB.config.nombre) || '',
         mensaje: mensaje
       })
+    });
+  } catch(e) { /* si esto falla, no hay nada más que hacer */ }
+}
+
+// Registra (sin avisar a Slack) cada intento de auto-login a una cuenta demo,
+// haya salido bien o mal, para poder medir la tasa real de rebote.
+async function registrarIntentoDemo(usuario, exito, intentos, mensaje) {
+  try {
+    await fetch(DEMO_LOGIN_EVENTO_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ usuario, exito, intentos, mensaje: mensaje || null })
     });
   } catch(e) { /* si esto falla, no hay nada más que hacer */ }
 }
@@ -6681,7 +6694,20 @@ async function arrancarSistema() {
     const _elegido = _demos[Math.floor(Math.random() * _demos.length)];
     document.getElementById('login-usr').value = _elegido.usr;
     document.getElementById('login-pass').value = _elegido.pass;
-    await doLogin();
+
+    // Reintento automático: si el primer intento falla (típicamente un problema
+    // pasajero de red), probamos una vez más antes de dejar a la persona afuera.
+    // _ultimoErrorLogin lo deja cargado doLogin() si el intento termina en error.
+    await doLogin(true);
+    let _intentosDemo = 1;
+    if (_ultimoErrorLogin) {
+      await new Promise(r => setTimeout(r, 1500));
+      document.getElementById('login-usr').value = _elegido.usr;
+      document.getElementById('login-pass').value = _elegido.pass;
+      await doLogin(false);
+      _intentosDemo = 2;
+    }
+    registrarIntentoDemo(_elegido.usr, !_ultimoErrorLogin, _intentosDemo, _ultimoErrorLogin);
     return;
   }
 
@@ -6783,7 +6809,11 @@ async function borrarSesionActiva() {
 
 // Override doLogin para conectar con Supabase
 const _doLoginOriginal = doLogin;
-doLogin = async function() {
+// _ultimoErrorLogin: si un intento de login termina en error, queda el mensaje acá
+// (y null si salió bien). Lo usa el flujo de ?demo=1 para saber si reintentar.
+let _ultimoErrorLogin = null;
+doLogin = async function(silencioso) {
+  _ultimoErrorLogin = null; // cada llamada arranca limpia, sin arrastrar el estado de la anterior
   const usr = document.getElementById('login-usr').value.trim();
   const pass = document.getElementById('login-pass').value;
   
@@ -6804,13 +6834,17 @@ doLogin = async function() {
     const loginData = await loginResp.json();
 
     if (!loginResp.ok || !loginData.token) {
-      loginErr.style.display = 'block';
-      loginErr.textContent = 'Usuario o contraseña incorrectos';
+      _ultimoErrorLogin = 'Usuario o contraseña incorrectos';
+      if (!silencioso) {
+        loginErr.style.display = 'block';
+        loginErr.textContent = 'Usuario o contraseña incorrectos';
+      }
       if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'Ingresar'; }
       document.getElementById('login-pass').value = '';
       return;
     }
 
+    _ultimoErrorLogin = null; // credenciales válidas: lo que pase de acá en más ya no es "fallo de login"
     SESSION_TOKEN = loginData.token;
     const usrSB = loginData.usuario;
     let negocioId = usrSB.negocio_id;
@@ -6864,9 +6898,13 @@ doLogin = async function() {
 
   } catch(e) {
     console.error('Error login:', e);
-    avisarSoporte('login_fallido', 'Fallo al iniciar sesión para usuario "' + usr + '": ' + (e && e.message ? e.message : e));
-    loginErr.style.display = 'block';
-    loginErr.textContent = 'Error de conexión. Verificá internet.';
+    const _detalleError = 'Fallo al iniciar sesión para usuario "' + usr + '": ' + (e && e.message ? e.message : e);
+    _ultimoErrorLogin = _detalleError;
+    if (!silencioso) {
+      avisarSoporte('login_fallido', _detalleError);
+      loginErr.style.display = 'block';
+      loginErr.textContent = 'Error de conexión. Verificá internet.';
+    }
     if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'Ingresar'; }
   }
 };
